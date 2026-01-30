@@ -1,8 +1,8 @@
 # Target
 CONFIG_IDF_TARGET="esp32"
 
-# Flash size (8MB for OTA dual-partition)
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# Flash size (4MB)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
 # Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y

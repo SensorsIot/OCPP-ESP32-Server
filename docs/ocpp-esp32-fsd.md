@@ -60,7 +60,7 @@ Network Separation:
 | MCU | ESP32-WROOM-32 or ESP32-S3 |
 | Ethernet | W5500 SPI Ethernet module (for wallbox) |
 | WiFi | Built-in ESP32 WiFi (for MQTT) |
-| Flash | Minimum 4MB (8MB recommended for OTA) |
+| Flash | 4MB |
 | PSRAM | Optional but recommended (4-8MB) |
 | Power | 5V DC via USB or barrel jack |
 
@@ -136,14 +136,14 @@ Network Separation:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Partition Table (8MB Flash)                            │
+│  Partition Table (4MB Flash)                            │
 ├─────────────────────────────────────────────────────────┤
 │  nvs        │  0x9000  │  20KB   │ Configuration       │
 │  otadata    │  0xE000  │   8KB   │ OTA state           │
-│  app0       │ 0x10000  │ 1.5MB   │ Application (slot 1)│
-│  app1       │ 0x190000 │ 1.5MB   │ Application (slot 2)│
-│  spiffs     │ 0x310000 │ 1.5MB   │ Web UI files        │
-│  coredump   │ 0x490000 │  64KB   │ Crash dumps         │
+│  app0       │ 0x10000  │   1MB   │ Application (slot 1)│
+│  app1       │ 0x110000 │   1MB   │ Application (slot 2)│
+│  spiffs     │ 0x210000 │ 1.9MB   │ Web UI files        │
+│  coredump   │ 0x3F0000 │  64KB   │ Crash dumps         │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -1598,7 +1598,7 @@ project(ocpp-esp32)
 
 Key sdkconfig settings:
 - Target: ESP32
-- Flash: 8MB (OTA dual partition)
+- Flash: 4MB (OTA dual partition)
 - Optimization: Size (`-Os`)
 - Watchdog: 5s timeout with panic
 - WiFi: SoftAP support enabled
@@ -1607,13 +1607,13 @@ Key sdkconfig settings:
 ### 9.2 Custom Partition Table (partitions.csv)
 
 ```csv
-# Name,   Type, SubType, Offset,   Size,    Flags
+# Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xE000,   0x2000,
-app0,     app,  ota_0,   0x10000,  0x180000,
-app1,     app,  ota_1,   0x190000, 0x180000,
-spiffs,   data, spiffs,  0x310000, 0x180000,
-coredump, data, coredump,0x490000, 0x10000,
+app0,     app,  ota_0,   0x10000,  0x100000,
+app1,     app,  ota_1,   0x110000, 0x100000,
+spiffs,   data, spiffs,  0x210000, 0x1E0000,
+coredump, data, coredump,0x3F0000, 0x10000,
 ```
 
 ### 9.3 ESP-IDF Component Dependencies

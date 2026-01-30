@@ -12,8 +12,8 @@ CLAUDE.md
 .continue/
 .tabby/
 
-# DevContainer (local config)
-.devcontainer/
+# DevContainer secrets only (config is tracked)
+.devcontainer/.env
 
 # Python
 __pycache__/

@@ -153,20 +153,21 @@ Network Separation:
 
 | Component | Library | Version | Purpose |
 |-----------|---------|---------|---------|
-| Framework | Arduino-ESP32 | 2.x | Core framework |
-| Build System | PlatformIO | Latest | Build toolchain |
-| Ethernet | Ethernet (W5500) | Built-in | Wallbox connection |
-| WiFi | WiFi | Built-in | MQTT/Internet connection |
-| WebSocket Server | ESPAsyncWebServer | 1.2.3+ | OCPP over Ethernet |
-| HTTP Server | ESPAsyncWebServer | 1.2.3+ | Captive portal UI |
-| DNS Server | DNSServer | Built-in | Captive portal redirect |
-| MQTT Client | AsyncMqttClient | 0.9.0+ | Energy manager comm |
-| JSON | ArduinoJson | 7.x | Message parsing |
+| Framework | ESP-IDF | 5.4 | Native C framework |
+| Build System | CMake + Ninja | Built-in | ESP-IDF build toolchain |
+| Ethernet | esp_eth (W5500 SPI) | Built-in | Wallbox connection |
+| WiFi | esp_wifi | Built-in | MQTT/Internet connection |
+| WebSocket Server | esp_http_server | Built-in | OCPP over Ethernet |
+| HTTP Server | esp_http_server | Built-in | Captive portal UI |
+| DNS Server | lwip | Built-in | Captive portal redirect |
+| MQTT Client | mqtt (esp-mqtt) | Built-in | Energy manager comm |
+| JSON | cJSON | Built-in | Message parsing |
 | OCPP | **Custom Implementation** | - | OCPP 1.6J subset |
-| OTA | ArduinoOTA / AsyncElegantOTA | - | Firmware updates |
-| NTP | ESP32 Time | Built-in | Time sync |
-| Config Storage | Preferences/NVS | Built-in | Persistent config |
-| File System | LittleFS | Built-in | Web UI storage |
+| OTA | esp_https_ota | Built-in | Firmware updates |
+| NTP | esp_sntp | Built-in | Time sync |
+| Config Storage | NVS Flash | Built-in | Persistent config |
+| File System | SPIFFS | Built-in | Web UI storage |
+| Console | esp_console | Built-in | Serial CLI REPL |
 
 ### 3.2 Module Architecture
 
@@ -215,7 +216,7 @@ Network Separation:
 
 | Task | Priority | Stack | Core | Description |
 |------|----------|-------|------|-------------|
-| Main Loop | 1 | 8KB | 0 | Arduino loop, LED updates |
+| Main Loop | 1 | 8KB | 0 | app_main(), watchdog feed |
 | Ethernet | 2 | 4KB | 0 | W5500 Ethernet management |
 | WiFi | 2 | 4KB | 0 | WiFi STA/AP management |
 | WebSocket | 3 | 8KB | 1 | OCPP WebSocket server |
@@ -1543,102 +1544,65 @@ NOTES
 
 ```
 ocpp-esp32/
-├── platformio.ini              # Build configuration
+├── CMakeLists.txt              # Top-level ESP-IDF project file
 ├── partitions.csv              # Custom partition table (OTA)
-├── include/
-│   ├── config.h                # Configuration structures
-│   ├── pins.h                  # GPIO pin definitions
-│   ├── version.h               # Firmware version
-│   ├── ethernet_manager.h      # W5500 Ethernet (wallbox)
-│   ├── wifi_manager.h          # WiFi STA/AP (MQTT)
-│   ├── captive_portal.h        # Configuration portal
-│   ├── ota_manager.h           # Firmware updates
-│   ├── websocket_server.h      # OCPP WebSocket
-│   ├── mqtt_client.h           # MQTT communication
-│   ├── ocpp_handler.h          # OCPP message handler
-│   ├── ocpp_messages.h         # OCPP message types
-│   ├── charging_profile.h      # Smart charging
-│   ├── transaction_manager.h   # Session management
-│   ├── phase_controller.h      # Phase switching
-│   ├── power_corrector.h       # Power value correction
-│   ├── led_status.h            # LED indicators
-│   └── config_manager.h        # NVS configuration
-├── src/
-│   ├── main.cpp                # Application entry
-│   ├── ethernet_manager.cpp
-│   ├── wifi_manager.cpp
-│   ├── captive_portal.cpp
-│   ├── ota_manager.cpp
-│   ├── websocket_server.cpp
-│   ├── mqtt_client.cpp
-│   ├── ocpp_handler.cpp
-│   ├── ocpp_messages.cpp
-│   ├── charging_profile.cpp
-│   ├── transaction_manager.cpp
-│   ├── phase_controller.cpp
-│   ├── power_corrector.cpp
-│   ├── led_status.cpp
-│   └── config_manager.cpp
-├── lib/
-│   └── (local libraries)
-├── test/
-│   ├── test_ocpp_messages/
-│   ├── test_phase_controller/
-│   ├── test_power_corrector/
-│   └── test_config_manager/
-├── data/                       # LittleFS files (web UI)
-│   ├── index.html
-│   ├── wifi.html
-│   ├── mqtt.html
-│   ├── system.html
-│   ├── update.html
-│   ├── style.css
-│   ├── app.js
-│   └── favicon.ico
-└── docs/
-    └── (documentation)
+├── sdkconfig.defaults          # Default Kconfig settings
+├── main/
+│   ├── CMakeLists.txt
+│   └── main.c                  # app_main(), boot mode logic, watchdog
+└── components/
+    ├── board_pins/              # GPIO pin definitions (header-only)
+    │   ├── CMakeLists.txt
+    │   ├── include/board_pins.h
+    │   └── board_pins.c
+    ├── led_status/              # LED pattern manager (timer-driven)
+    │   ├── CMakeLists.txt
+    │   ├── include/led_status.h
+    │   └── led_status.c
+    ├── config_manager/          # NVS read/write, config struct
+    │   ├── CMakeLists.txt
+    │   ├── include/config_manager.h
+    │   └── config_manager.c
+    ├── gpio_control/            # Phase relays + config button
+    │   ├── CMakeLists.txt
+    │   ├── include/gpio_control.h
+    │   └── gpio_control.c
+    ├── ethernet_manager/        # W5500 SPI Ethernet init
+    │   ├── CMakeLists.txt
+    │   ├── include/ethernet_manager.h
+    │   └── ethernet_manager.c
+    ├── wifi_manager/            # WiFi STA/AP mode management
+    │   ├── CMakeLists.txt
+    │   ├── include/wifi_manager.h
+    │   └── wifi_manager.c
+    └── console_cmd/             # Serial CLI commands
+        ├── CMakeLists.txt
+        ├── include/console_cmd.h
+        └── console_cmd.c
 ```
 
 ## 9. Dependencies
 
-### 9.1 PlatformIO Configuration
+### 9.1 ESP-IDF Build Configuration
 
-```ini
-[env:esp32]
-platform = espressif32@6.4.0
-board = esp32dev
-framework = arduino
-board_build.partitions = partitions.csv
-board_build.filesystem = littlefs
+The project uses ESP-IDF v5.4 native CMake build system. All dependencies are
+built-in ESP-IDF components — no external libraries required.
 
-lib_deps =
-    # Networking
-    ESP Async WebServer @ ^1.2.3
-    AsyncTCP @ ^1.1.1
-    AsyncMqttClient @ ^0.9.0
-
-    # JSON
-    ArduinoJson @ ^7.0.0
-
-    # Ethernet
-    Ethernet @ ^2.0.2        ; W5500 support
-
-    # OTA
-    AsyncElegantOTA @ ^2.2.7
-
-    # DNS for captive portal
-    DNSServer                ; Built-in
-
-build_flags =
-    -DASYNCWEBSERVER_REGEX
-    -DCORE_DEBUG_LEVEL=3
-
-monitor_speed = 115200
-upload_speed = 921600
-
-; OTA partition scheme (8MB flash)
-; app0: 1.5MB, app1: 1.5MB, spiffs: 1.5MB
+```cmake
+# Top-level CMakeLists.txt
+cmake_minimum_required(VERSION 3.16)
+set(EXTRA_COMPONENT_DIRS "components")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(ocpp-esp32)
 ```
+
+Key sdkconfig settings:
+- Target: ESP32
+- Flash: 8MB (OTA dual partition)
+- Optimization: Size (`-Os`)
+- Watchdog: 5s timeout with panic
+- WiFi: SoftAP support enabled
+- Ethernet: W5500 SPI enabled
 
 ### 9.2 Custom Partition Table (partitions.csv)
 
@@ -1652,20 +1616,17 @@ spiffs,   data, spiffs,  0x310000, 0x180000,
 coredump, data, coredump,0x490000, 0x10000,
 ```
 
-### 9.3 Library Purposes
+### 9.3 ESP-IDF Component Dependencies
 
-| Library | Purpose |
-|---------|---------|
-| ESP Async WebServer | OCPP WebSocket + Captive portal HTTP |
-| AsyncTCP | Async networking foundation |
-| AsyncMqttClient | Non-blocking MQTT over WiFi |
-| ArduinoJson | OCPP message parsing |
-| Ethernet | W5500 SPI Ethernet driver |
-| AsyncElegantOTA | Web-based firmware updates |
-| DNSServer | Captive portal DNS redirect |
-| Preferences | NVS configuration storage (built-in) |
-| WiFi | ESP32 WiFi (built-in) |
-| LittleFS | Web UI file storage (built-in) |
+| Component | ESP-IDF Module | Purpose |
+|-----------|---------------|---------|
+| board_pins | soc | GPIO number definitions |
+| led_status | esp_driver_gpio, esp_timer | LED output + 50ms tick timer |
+| config_manager | nvs_flash, esp_wifi | NVS persistence, MAC address |
+| gpio_control | esp_driver_gpio, esp_timer | Relay output + button polling |
+| ethernet_manager | esp_eth, esp_driver_spi, esp_netif | W5500 SPI Ethernet |
+| wifi_manager | esp_wifi, esp_netif, lwip | WiFi STA/AP modes |
+| console_cmd | console, esp_system | Serial REPL commands |
 
 ## 10. Appendices
 
@@ -1707,4 +1668,8 @@ Available → Preparing → Charging → SuspendedEV/SuspendedEVSE → Finishing
 | | | | Added phase switching control (1/3 phase) |
 | | | | Added power value correction for phase modes |
 | | | | Added safety-critical phase switching sequence |
+| 1.2 | 2026-01-30 | - | Changed framework from Arduino/PlatformIO to ESP-IDF v5.4 native C |
+| | | | Updated project structure to ESP-IDF component architecture |
+| | | | Updated dependency table to ESP-IDF built-in components |
+| | | | Added serial console CLI (esp_console) to framework table |
 | | | | Specified custom OCPP implementation (not MicroOcpp) |

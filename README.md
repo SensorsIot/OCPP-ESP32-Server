@@ -60,7 +60,16 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 │   │   ├── mqtt_client/           # MQTT command/status client
 │   │   └── scenarios/             # Automated test sequences
 │   └── config/                    # Test configuration
-└── 🔧 ocpp-esp32/                 # ESP32 firmware (planned)
+└── 🔧 ocpp-esp32/                 # ESP32 firmware (ESP-IDF v5.4)
+    ├── main/main.c                # Boot logic, watchdog
+    └── components/                # ESP-IDF components
+        ├── board_pins/            # GPIO pin definitions
+        ├── led_status/            # LED blink patterns
+        ├── config_manager/        # NVS config persistence
+        ├── gpio_control/          # Relays + config button
+        ├── ethernet_manager/      # W5500 SPI Ethernet
+        ├── wifi_manager/          # WiFi STA/AP modes
+        └── console_cmd/           # Serial CLI REPL
 ```
 
 ---
@@ -92,7 +101,7 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 |-------|-------------|--------|
 | 📄 FSD | Functional Specification | ✅ Complete |
 | 🧪 Test Scaffold | Simulator directory structure | ✅ Complete |
-| 🔧 Phase 1 | Core infrastructure (ETH, WiFi, NVS, LEDs) | ⬜ Planned |
+| 🔧 Phase 1 | Core infrastructure (ETH, WiFi, NVS, LEDs, Console) | ✅ Complete |
 | 🌐 Phase 2 | Captive portal & configuration | ⬜ Planned |
 | 🔄 Phase 3 | OTA updates | ⬜ Planned |
 | ⚡ Phase 4 | OCPP core (WebSocket, messages) | ⬜ Planned |
@@ -110,6 +119,30 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 
 - [ESP-IDF v5.4](https://docs.espressif.com/projects/esp-idf/en/v5.4/esp32/get-started/)
 - Python 3.11+ (for test simulator)
+
+### Build ESP32 Firmware
+
+```bash
+cd ocpp-esp32
+source /path/to/esp-idf/export.sh
+idf.py set-target esp32
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+### Serial Console
+
+After flashing, connect at 115200 baud. Available commands:
+
+| Command | Description |
+|---------|-------------|
+| `status` | System status (network, phase mode, heap) |
+| `heap` | Free/minimum heap memory |
+| `config` | Show all configuration values |
+| `config_set <key> <value>` | Set a config value (persisted to NVS) |
+| `wifi_scan` | Scan for nearby WiFi networks |
+| `factory_reset` | Restore factory defaults |
+| `reboot` | Reboot the device |
 
 ### Test Simulator Setup
 

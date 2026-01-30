@@ -1,4 +1,12 @@
 # OCPP Test Simulator Configuration
+#
+# In test mode, both the wallbox emulator (WebSocket) and MQTT client
+# connect to the ESP32 over WiFi. The ESP32 must have test_mode enabled
+# so its WebSocket server listens on the WiFi interface.
+#
+# Network topology (test mode):
+#   Simulator --WebSocket--> ESP32 WiFi IP:9000  (wallbox emulator)
+#   Simulator --MQTT-------> MQTT Broker          (energy manager)
 
 wallbox:
   charge_point_id: "CP001"
@@ -10,7 +18,9 @@ wallbox:
   num_connectors: 1
 
   # WebSocket connection to ESP32 OCPP server
-  ocpp_server: "ws://192.168.4.1:9000/ocpp/CP001"
+  # In test mode: use the ESP32 WiFi IP (same network as simulator)
+  # In production: would use Ethernet IP 192.168.4.1
+  ocpp_server: "ws://192.168.1.50:9000/ocpp/CP001"
   heartbeat_interval_sec: 60
   reconnect_delay_sec: 5
 

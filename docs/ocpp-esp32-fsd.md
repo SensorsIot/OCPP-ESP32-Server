@@ -252,8 +252,9 @@ Network Separation:
 | Mode | WiFi | Ethernet | OCPP | MQTT | Portal | OTA |
 |------|------|----------|------|------|--------|-----|
 | Config | AP | Inactive | No | No | Yes | Yes |
-| Normal | STA | Active | Yes | Yes | No | Yes |
-| Fallback | AP+STA | Active | Yes | No | Yes | Yes |
+| Normal | STA | Active | ETH only | Yes | No | Yes |
+| Test | STA | Optional | ETH + WiFi | Yes | No | Yes |
+| Fallback | AP+STA | Active | ETH only | No | Yes | Yes |
 
 ## 4. Functional Requirements
 
@@ -264,8 +265,9 @@ Network Separation:
 - **ETH-002**: System SHALL use static IP for Ethernet (default: 192.168.4.1)
 - **ETH-003**: System SHALL monitor link status and indicate via LED
 - **ETH-004**: System SHALL support configurable static IP settings
-- **ETH-005**: Ethernet network SHALL be isolated from WiFi network
-- **ETH-006**: OCPP WebSocket server SHALL only bind to Ethernet interface
+- **ETH-005**: Ethernet network SHALL be isolated from WiFi network in Normal mode
+- **ETH-006**: OCPP WebSocket server SHALL bind to Ethernet interface in Normal mode
+- **ETH-007**: In Test mode, OCPP WebSocket server SHALL also bind to WiFi interface
 
 #### 4.1.2 WiFi Station Mode (MQTT/Internet Network)
 - **WIFI-001**: System SHALL connect to configured WiFi network in STA mode
@@ -283,6 +285,32 @@ Network Separation:
 - **AP-004**: AP SHALL use configurable password (default: `ocpp12345`)
 - **AP-005**: AP SHALL assign IP 192.168.1.1 to clients
 - **AP-006**: System MAY run AP and STA concurrently (fallback mode)
+
+#### 4.1.4 Test Mode
+- **TEST-001**: System SHALL support a "Test mode" configurable via captive portal or NVS
+- **TEST-002**: In Test mode, WebSocket server SHALL listen on ALL interfaces (ETH + WiFi)
+- **TEST-003**: In Test mode, wallbox emulator MAY connect via WiFi instead of Ethernet
+- **TEST-004**: Test mode SHALL be indicated by rapid alternating LED blink pattern
+- **TEST-005**: Test mode allows full operation without Ethernet hardware connected
+
+```
+  Test Mode Network Topology:
+  ┌─────────────────────────────────────────────────────────────┐
+  │                     WiFi Network                            │
+  │                                                             │
+  │  ┌───────────────────┐         ┌───────────────────────┐   │
+  │  │ Python Simulator  │         │    ESP32 OCPP Server  │   │
+  │  │                   │         │                       │   │
+  │  │ Wallbox Emulator ─┼─ WS ──►│ WebSocket (WiFi:9000) │   │
+  │  │                   │         │                       │   │
+  │  │ MQTT Client ──────┼─ MQTT ►│ MQTT Client ──────────┼───┤
+  │  └───────────────────┘         └───────────────────────┘   │
+  │                                                      │     │
+  │                                              ┌───────┴───┐ │
+  │                                              │MQTT Broker│ │
+  │                                              └───────────┘ │
+  └─────────────────────────────────────────────────────────────┘
+```
 
 ### 4.2 Captive Portal
 
@@ -568,6 +596,7 @@ Wallbox                    ESP32                     MQTT/Manager
 |-----------|------|---------|-------------|
 | `device_name` | string | "ocpp-esp32" | Device identifier |
 | `log_level` | enum | "info" | Logging verbosity |
+| `test_mode` | bool | false | Enable test mode (WS on WiFi) |
 
 **Ethernet Settings (Wallbox Network):**
 | Parameter | Type | Default | Description |

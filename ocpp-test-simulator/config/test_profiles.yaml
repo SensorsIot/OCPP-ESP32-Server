@@ -1,0 +1,132 @@
+# Test Scenario Profiles
+
+profiles:
+  # Basic charging cycle test
+  basic_charge:
+    description: "Simple charge start/stop cycle"
+    duration_sec: 300
+    steps:
+      - action: connect_ev
+        delay_sec: 0
+      - action: authorize
+        id_tag: "TEST001"
+        delay_sec: 2
+      - action: start_charging
+        delay_sec: 5
+      - action: wait
+        duration_sec: 120
+      - action: stop_charging
+        delay_sec: 0
+      - action: disconnect_ev
+        delay_sec: 5
+
+  # Phase switching test
+  phase_switch:
+    description: "Test 1-phase to 3-phase switching"
+    duration_sec: 600
+    steps:
+      - action: connect_ev
+        delay_sec: 0
+      - action: start_charging
+        delay_sec: 5
+      - action: mqtt_set_power_limit
+        power_kw: 3.5  # Should trigger 1-phase
+        delay_sec: 30
+      - action: verify_phase_mode
+        expected: "1-phase"
+        delay_sec: 10
+      - action: mqtt_set_power_limit
+        power_kw: 7.4  # Should trigger 3-phase
+        delay_sec: 30
+      - action: verify_phase_mode
+        expected: "3-phase"
+        delay_sec: 10
+      - action: stop_charging
+        delay_sec: 0
+
+  # Power limiting test
+  power_limit:
+    description: "Test dynamic power limiting"
+    duration_sec: 300
+    steps:
+      - action: connect_ev
+        delay_sec: 0
+      - action: start_charging
+        delay_sec: 5
+      - action: mqtt_set_power_limit
+        power_kw: 11.0
+        delay_sec: 30
+      - action: verify_power_limit
+        expected_kw: 11.0
+        tolerance_percent: 5
+        delay_sec: 10
+      - action: mqtt_set_power_limit
+        power_kw: 5.5
+        delay_sec: 30
+      - action: verify_power_limit
+        expected_kw: 5.5
+        tolerance_percent: 5
+        delay_sec: 10
+      - action: stop_charging
+        delay_sec: 0
+
+  # Remote start/stop test
+  remote_control:
+    description: "Test MQTT remote start/stop"
+    duration_sec: 180
+    steps:
+      - action: connect_ev
+        delay_sec: 0
+      - action: mqtt_remote_start
+        id_tag: "REMOTE001"
+        delay_sec: 10
+      - action: verify_charging
+        expected: true
+        delay_sec: 5
+      - action: wait
+        duration_sec: 60
+      - action: mqtt_remote_stop
+        delay_sec: 10
+      - action: verify_charging
+        expected: false
+        delay_sec: 5
+      - action: disconnect_ev
+        delay_sec: 5
+
+  # Connection resilience test
+  resilience:
+    description: "Test reconnection handling"
+    duration_sec: 300
+    steps:
+      - action: connect_ev
+        delay_sec: 0
+      - action: start_charging
+        delay_sec: 5
+      - action: simulate_disconnect
+        interface: "websocket"
+        duration_sec: 30
+      - action: verify_reconnected
+        timeout_sec: 60
+      - action: verify_charging
+        expected: true
+        delay_sec: 5
+      - action: stop_charging
+        delay_sec: 0
+
+  # Stress test
+  stress:
+    description: "Rapid command stress test"
+    duration_sec: 600
+    repeat_count: 10
+    steps:
+      - action: connect_ev
+        delay_sec: 0
+      - action: start_charging
+        delay_sec: 2
+      - action: mqtt_set_power_limit
+        power_kw: random(3.0, 11.0)
+        delay_sec: 5
+      - action: stop_charging
+        delay_sec: 2
+      - action: disconnect_ev
+        delay_sec: 2

@@ -1,0 +1,45 @@
+# OCPP Test Simulator Configuration
+
+wallbox:
+  charge_point_id: "CP001"
+  vendor: "TestVendor"
+  model: "SimulatorV1"
+  serial_number: "SIM001"
+  firmware_version: "1.0.0"
+  max_current_a: 32
+  num_connectors: 1
+
+  # WebSocket connection to ESP32 OCPP server
+  ocpp_server: "ws://192.168.4.1:9000/ocpp/CP001"
+  heartbeat_interval_sec: 60
+  reconnect_delay_sec: 5
+
+mqtt:
+  broker: "192.168.1.100"
+  port: 1883
+  username: ""
+  password: ""
+  client_id: "ocpp-test-simulator"
+  topic_prefix: "ocpp"
+  qos: 1
+
+simulation:
+  # Meter simulation
+  meter_interval_sec: 10
+  voltage_v: 230
+  power_factor: 0.98
+
+  # EV simulation
+  ev_battery_kwh: 60
+  ev_initial_soc_percent: 20
+  ev_target_soc_percent: 80
+  ev_max_charge_rate_kw: 11
+
+  # Timing
+  plug_in_delay_sec: 2
+  charge_start_delay_sec: 1
+
+logging:
+  level: "INFO"
+  file: "logs/simulator.log"
+  console: true

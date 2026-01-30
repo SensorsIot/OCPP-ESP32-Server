@@ -140,9 +140,9 @@ Network Separation:
 ├─────────────────────────────────────────────────────────┤
 │  nvs        │  0x9000  │  20KB   │ Configuration       │
 │  otadata    │  0xE000  │   8KB   │ OTA state           │
-│  app0       │ 0x10000  │   1MB   │ Application (slot 1)│
-│  app1       │ 0x110000 │   1MB   │ Application (slot 2)│
-│  spiffs     │ 0x210000 │ 1.9MB   │ Web UI files        │
+│  app0       │ 0x10000  │ 1.75MB  │ Application (slot 1)│
+│  app1       │ 0x1D0000 │ 1.75MB  │ Application (slot 2)│
+│  spiffs     │ 0x390000 │ 384KB   │ Web UI files        │
 │  coredump   │ 0x3F0000 │  64KB   │ Crash dumps         │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -1610,9 +1610,9 @@ Key sdkconfig settings:
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xE000,   0x2000,
-app0,     app,  ota_0,   0x10000,  0x100000,
-app1,     app,  ota_1,   0x110000, 0x100000,
-spiffs,   data, spiffs,  0x210000, 0x1E0000,
+app0,     app,  ota_0,   0x10000,  0x1C0000,
+app1,     app,  ota_1,   0x1D0000, 0x1C0000,
+spiffs,   data, spiffs,  0x390000, 0x60000,
 coredump, data, coredump,0x3F0000, 0x10000,
 ```
 

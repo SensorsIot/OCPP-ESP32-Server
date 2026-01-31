@@ -185,7 +185,7 @@ When the CSMS sends GetCompositeSchedule, the CP:
 
 ### 4.2 Charging Sessions
 
-#### TC-100: Basic Charge Cycle (3-phase, 16A, ~11 kW)
+#### TC-100: Charge at 11 kW (3-phase, 16A, 11.04 kW)
 
 **Purpose**: Full charge cycle at nominal 3-phase residential power.
 
@@ -226,7 +226,7 @@ When the CSMS sends GetCompositeSchedule, the CP:
 **Pass**: Full cycle completes, meter values within 5% of expected, all status
 transitions correct.
 
-#### TC-101: Basic Charge Cycle (1-phase, 16A, ~3.7 kW)
+#### TC-101: Charge at 3.7 kW (1-phase, 16A, 3.68 kW)
 
 **Purpose**: Full charge cycle at 1-phase residential power.
 
@@ -256,7 +256,7 @@ Same flow as TC-100, but with:
 
 **Pass**: Wallbox reports raw values, CSMS publishes corrected values to MQTT.
 
-#### TC-106: Free Charging Without Authorization (3-phase, 16A)
+#### TC-106: Charge at 11 kW Without Authorization (3-phase, 16A, 11.04 kW)
 
 **Purpose**: Verify charge cycle when CP skips the Authorize step entirely
 (free charging mode / no RFID required).
@@ -285,7 +285,7 @@ The CP sends StartTransaction directly. The CSMS accepts or rejects via
 **Pass**: Transaction completes without Authorize step. CSMS accepts the
 transaction based on StartTransaction alone.
 
-#### TC-107: Free Charging Without Authorization (1-phase, 16A)
+#### TC-107: Charge at 3.7 kW Without Authorization (1-phase, 16A, 3.68 kW)
 
 **Purpose**: Same as TC-106 but in 1-phase mode.
 
@@ -318,33 +318,47 @@ to StartTransaction.
 
 **Pass**: Transaction starts without separate Authorize. CSMS assigns transactionId.
 
-#### TC-102: Charge at Reduced Current (3-phase, 8A, ~5.5 kW)
+#### TC-102: Charge at 7 kW (3-phase, 10A, 6.9 kW)
 
-**Purpose**: Verify current limiting via SetChargingProfile.
+**Purpose**: Verify mid-range 3-phase charging via SetChargingProfile.
 
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1-10 | | | Same as TC-100 steps 1-10 |
-| 11 | CSMS->CP | SetChargingProfile | `limit:8.0`, `chargingRateUnit:"A"` |
+| 11 | CSMS->CP | SetChargingProfile | `limit:10.0`, `chargingRateUnit:"A"` |
 | 12 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
-| 13 | CP->CSMS | MeterValues | `Power.Active.Import: ~5520W`, `Current.Import: ~8A` |
+| 13 | CP->CSMS | MeterValues | `Power.Active.Import: ~6900W`, `Current.Import: ~10A` |
 
-**Expected**: Power drops from ~11 kW to ~5.5 kW within 10 seconds.
+**Expected meter values (3-phase, 10A)**:
+| Measurand | Value | Calculation |
+|-----------|-------|-------------|
+| Power.Active.Import | ~6,900 W | 3 x 230V x 10A |
+| Current.Import (each) | ~10 A | |
 
-#### TC-103: Charge at Reduced Current (1-phase, 10A, ~2.3 kW)
+**Pass**: Power at ~6.9 kW within 10 seconds of profile change.
 
-**Setup**: Phase mode = 1-phase.
+#### TC-103: Charge at 4.1 kW (3-phase, 6A, 4.14 kW) — Phase Switch Threshold
+
+**Purpose**: Verify charging at the exact phase switch threshold boundary.
+At 3-phase 6A the power is 4.14 kW — this is the minimum 3-phase current and
+the boundary where the CSMS decides between 1-phase and 3-phase mode.
 
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
-| 1-10 | | | Same as TC-101 steps 1-10 |
-| 11 | CSMS->CP | SetChargingProfile | `limit:10.0`, `chargingRateUnit:"A"` |
+| 1-10 | | | Same as TC-100 steps 1-10 |
+| 11 | CSMS->CP | SetChargingProfile | `limit:6.0`, `chargingRateUnit:"A"` |
 | 12 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
-| 13 | CP->CSMS | MeterValues | `Power.Active.Import: ~6900W` (raw 3-phase equiv) |
+| 13 | CP->CSMS | MeterValues | `Power.Active.Import: ~4140W`, `Current.Import: ~6A` |
 
-**CSMS corrected**: ~2,300 W actual (6900 / 3).
+**Expected meter values (3-phase, 6A)**:
+| Measurand | Value | Calculation |
+|-----------|-------|-------------|
+| Power.Active.Import | ~4,140 W | 3 x 230V x 6A |
+| Current.Import (each) | ~6 A | Minimum per IEC 61851 |
 
-#### TC-104: Charge at Low Power (1-phase, ~8.7A, ~2 kW)
+**Pass**: Charging stable at 6A/4.1 kW. This is the lowest valid 3-phase current.
+
+#### TC-104: Charge at 2 kW (1-phase, 8.7A, 2.0 kW)
 
 **Purpose**: Verify low-power 1-phase charging.
 
@@ -367,7 +381,7 @@ to StartTransaction.
 
 **Pass**: CSMS-corrected power ≈ 2 kW.
 
-#### TC-105: Suspend Charging (0 kW)
+#### TC-105: Charge at 0 kW (Suspend, 0A, 0 kW)
 
 **Purpose**: Verify charging suspends cleanly when limit is set to zero.
 
@@ -782,7 +796,7 @@ wallbox:
 | 3c | TC-108 | TC-106 (remote start without auth) |
 | 4 | TC-300, TC-301 | TC-100 (remote control with auth) |
 | 5 | TC-200, TC-201, TC-202 | TC-100 (dynamic power) |
-| 6 | TC-102, TC-103, TC-104, TC-105 | TC-200 (power variants) |
+| 6 | TC-102, TC-103, TC-104, TC-105 | TC-100 (power level variants) |
 | 7 | TC-400, TC-401, TC-402 | TC-300 (phase switching basics) |
 | 7b | TC-405, TC-406, TC-407 | TC-400 (phase switch details) |
 | 7c | TC-403, TC-404 | TC-400 (phase switch error cases) |

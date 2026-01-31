@@ -170,16 +170,65 @@ When the CSMS sends GetCompositeSchedule, the CP:
 | 1 | CSMS->CP | GetConfiguration | `key:[]` (all keys) |
 | 2 | CP->CSMS | GetConfiguration.conf | Returns `configurationKey[]` with supported keys |
 
-**Expected keys**: `MeterValuesSampledData`, `MeterValueSampleInterval`,
-`HeartbeatInterval`, `NumberOfConnectors`, `ChargeProfileMaxStackLevel`.
+**Expected keys (power/current related)**:
 
-#### TC-014: ChangeConfiguration
+| Key | Value | R/O | Description |
+|-----|-------|-----|-------------|
+| `NumberOfConnectors` | `"1"` | yes | Physical connectors |
+| `ConnectorPhaseRotation` | `"1.RST"` | yes | Phase wiring |
+| `ChargingScheduleAllowedChargingRateUnit` | `"Current"` | yes | A or W or both |
+| `ChargeProfileMaxStackLevel` | `"3"` | yes | Max stacked profiles |
+| `MaxChargingProfilesInstalled` | `"5"` | yes | Max stored profiles |
+| `ChargingScheduleMaxPeriods` | `"5"` | yes | Max schedule periods |
+| `HeartbeatInterval` | `"60"` | no | Seconds between heartbeats |
+| `MeterValueSampleInterval` | `"10"` | no | Seconds between meter samples |
+| `MeterValuesSampledData` | see below | no | Comma-separated measurands |
+| `StopTransactionOnInvalidId` | `"true"` | no | Stop if idTag invalid |
+| `StopTransactionOnEVSideDisconnect` | `"true"` | no | Stop if EV unplugs |
+
+**Note on current/power capacity**: The wallbox advertises its electrical
+capabilities through GetConfiguration. The CSMS uses these values to validate
+SetChargingProfile limits. The CSMS should never set a limit above what the
+wallbox reports.
+
+#### TC-014: ChangeConfiguration (Meter Interval)
 
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | CSMS->CP | ChangeConfiguration | `key:"MeterValueSampleInterval"`, `value:"10"` |
 | 2 | CP->CSMS | ChangeConfiguration.conf | `status:"Accepted"` |
 | 3 | | | CP now reports MeterValues every 10 seconds |
+
+#### TC-015: Configure Charging Rate Unit — Current (A)
+
+**Purpose**: Set the wallbox to accept charging profiles in Amperes.
+This must be done before running TC-100–TC-105 current-based tests.
+
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1 | CSMS->CP | GetConfiguration | `key:["ChargingScheduleAllowedChargingRateUnit"]` |
+| 2 | CP->CSMS | GetConfiguration.conf | `value:"Current"` or `value:"Current,Power"` |
+| 3 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"A"`, `limit:16.0` |
+| 4 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 5 | CP->CSMS | MeterValues | `Current.Import: ~16A` |
+
+**Pass**: Wallbox accepts current-based profile and charges at requested Amps.
+
+#### TC-016: Configure Charging Rate Unit — Power (W)
+
+**Purpose**: Set the wallbox to accept charging profiles in Watts.
+This must be done before running TC-110–TC-115 power-based tests.
+
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1 | CSMS->CP | GetConfiguration | `key:["ChargingScheduleAllowedChargingRateUnit"]` |
+| 2 | CP->CSMS | GetConfiguration.conf | `value:"Power"` or `value:"Current,Power"` |
+| 3 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:11040.0` |
+| 4 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 5 | CP->CSMS | MeterValues | `Power.Active.Import: ~11040W` |
+
+**Pass**: Wallbox accepts power-based profile and charges at requested Watts.
+If the wallbox only supports `"Current"`, step 3 returns `status:"Rejected"`.
 
 ---
 
@@ -401,6 +450,114 @@ the boundary where the CSMS decides between 1-phase and 3-phase mode.
 
 **Pass**: Charging suspends at 0A (no fault), resumes when limit restored.
 Energy meter does not increment during suspension.
+
+#### TC-109: Charge at 0 kW — Wallbox Stops Transaction (0A, 0 kW)
+
+**Purpose**: Some wallboxes stop the transaction entirely when they receive a
+0A charging profile instead of suspending. Verify the CSMS handles this
+gracefully.
+
+**Setup**: Charging in progress at 16A.
+
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1-12 | | | Charging at 16A (TC-100 steps 1-12) |
+| 13 | CSMS->CP | SetChargingProfile | `limit:0.0`, `chargingRateUnit:"A"` |
+| 14 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 15 | CP->CSMS | StopTransaction | `transactionId`, `meterStop`, `reason:"Other"` |
+| 16 | CSMS->CP | StopTransaction.conf | `idTagInfo.status:"Accepted"` |
+| 17 | CP->CSMS | StatusNotification | `status:"Finishing"` |
+| 18 | CP->CSMS | StatusNotification | `status:"Available"` (EV still plugged in) |
+| 19 | | | *CSMS raises limit again* |
+| 20 | CSMS->CP | SetChargingProfile | `limit:16.0`, `chargingRateUnit:"A"` |
+| 21 | CSMS->CP | RemoteStartTransaction | `connectorId:1`, `idTag:"evcc"` |
+| 22 | CP->CSMS | StartTransaction | `meterStart` = previous `meterStop` |
+| 23 | CP->CSMS | StatusNotification | `status:"Charging"` |
+| 24 | CP->CSMS | MeterValues | `Power.Active.Import: ~11040W` (resumes) |
+
+**Key difference from TC-105**: The wallbox ends the transaction (StopTransaction)
+rather than suspending (SuspendedEVSE). To resume, the CSMS must issue a new
+RemoteStartTransaction.
+
+**Pass**: CSMS detects transaction ended, can restart when limit is restored.
+Energy accounting is continuous (`meterStart` of new tx = `meterStop` of old tx).
+
+### 4.2b Charging Sessions — Power-Based Profiles (W)
+
+These tests mirror TC-100–TC-105 but use `chargingRateUnit:"W"` instead of `"A"`.
+Run TC-016 first to verify the wallbox supports power-based profiles.
+
+#### TC-110: Charge at 11 kW (3-phase, 11040W)
+
+**Purpose**: Full charge cycle using power-based profile.
+
+Same flow as TC-100, except:
+
+| Step | Change from TC-100 |
+|------|--------------------|
+| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:11040.0` |
+| 13 | MeterValues: `Power.Active.Import: ~11040W`, `Current.Import: ~16A` |
+
+**Pass**: Same result as TC-100. Wallbox translates W to A internally.
+
+#### TC-111: Charge at 3.7 kW (1-phase, 3680W)
+
+Same flow as TC-101, except:
+
+| Step | Change from TC-101 |
+|------|--------------------|
+| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:3680.0` |
+
+**Note**: The profile limit is the **actual** target power (3680W), not the raw
+3-phase equivalent. The wallbox converts to per-phase current: 3680 / 230 = 16A on L1.
+
+#### TC-112: Charge at 7 kW (3-phase, 6900W)
+
+Same flow as TC-102, except:
+
+| Step | Change from TC-102 |
+|------|--------------------|
+| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:6900.0` |
+| 13 | MeterValues: `Power.Active.Import: ~6900W`, `Current.Import: ~10A` |
+
+#### TC-113: Charge at 4.1 kW (3-phase, 4140W)
+
+Same flow as TC-103, except:
+
+| Step | Change from TC-103 |
+|------|--------------------|
+| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:4140.0` |
+| 13 | MeterValues: `Power.Active.Import: ~4140W`, `Current.Import: ~6A` |
+
+#### TC-114: Charge at 2 kW (1-phase, 2000W)
+
+Same flow as TC-104, except:
+
+| Step | Change from TC-104 |
+|------|--------------------|
+| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:2000.0` |
+| 13 | MeterValues: `Power.Active.Import: ~6000W` (raw), corrected ~2000W |
+
+#### TC-115: Charge at 0 kW (Suspend, 0W)
+
+Same flow as TC-105, except:
+
+| Step | Change from TC-105 |
+|------|--------------------|
+| 13 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:0.0` |
+
+**Pass**: Same behavior as TC-105 — wallbox suspends, resumes when limit restored.
+
+### 4.2c Power-Based vs Current-Based Summary
+
+| Target | Current-Based (A) | Power-Based (W) | Test Cases |
+|--------|--------------------|------------------|------------|
+| 11 kW | `limit:16.0` A | `limit:11040.0` W | TC-100 / TC-110 |
+| 7 kW | `limit:10.0` A | `limit:6900.0` W | TC-102 / TC-112 |
+| 4.1 kW | `limit:6.0` A | `limit:4140.0` W | TC-103 / TC-113 |
+| 3.7 kW | `limit:16.0` A (1φ) | `limit:3680.0` W | TC-101 / TC-111 |
+| 2 kW | `limit:8.7` A (1φ) | `limit:2000.0` W | TC-104 / TC-114 |
+| 0 kW | `limit:0.0` A | `limit:0.0` W | TC-105 / TC-115 |
 
 ---
 
@@ -777,12 +934,25 @@ wallbox:
     - Power.Active.Import
     - Current.Import
     - Voltage
+
+  # OCPP configuration keys returned by GetConfiguration
   configuration_keys:
+    # Power and current capacity (read-only)
+    NumberOfConnectors: "1"
+    ConnectorPhaseRotation: "1.RST"
+    ChargingScheduleAllowedChargingRateUnit: "Current"
+    ChargeProfileMaxStackLevel: "3"
+    MaxChargingProfilesInstalled: "5"
+    ChargingScheduleMaxPeriods: "5"
+
+    # Metering (read-write)
     MeterValueSampleInterval: "10"
     MeterValuesSampledData: "Energy.Active.Import.Register,Power.Active.Import,Current.Import,Voltage"
+
+    # Behavior (read-write)
     HeartbeatInterval: "60"
-    NumberOfConnectors: "1"
-    ChargeProfileMaxStackLevel: "3"
+    StopTransactionOnInvalidId: "true"
+    StopTransactionOnEVSideDisconnect: "true"
 ```
 
 ## 7. Test Execution Order
@@ -791,12 +961,14 @@ wallbox:
 |----------|------------|------------|
 | 1 | TC-010, TC-011 | None (connection basics) |
 | 2 | TC-012, TC-013, TC-014 | TC-010 (connected) |
-| 3 | TC-100, TC-101 | TC-010 (full charge cycles with auth) |
+| 2b | TC-015, TC-016 | TC-013 (charging rate unit config) |
+| 3 | TC-100, TC-101 | TC-015 (full charge cycles, current-based) |
 | 3b | TC-106, TC-107 | TC-010 (full charge cycles without auth) |
 | 3c | TC-108 | TC-106 (remote start without auth) |
 | 4 | TC-300, TC-301 | TC-100 (remote control with auth) |
 | 5 | TC-200, TC-201, TC-202 | TC-100 (dynamic power) |
-| 6 | TC-102, TC-103, TC-104, TC-105 | TC-100 (power level variants) |
+| 6 | TC-102, TC-103, TC-104, TC-105, TC-109 | TC-100 (current-based power variants) |
+| 6b | TC-110–TC-115 | TC-016 (power-based W variants) |
 | 7 | TC-400, TC-401, TC-402 | TC-300 (phase switching basics) |
 | 7b | TC-405, TC-406, TC-407 | TC-400 (phase switch details) |
 | 7c | TC-403, TC-404 | TC-400 (phase switch error cases) |
@@ -1146,7 +1318,7 @@ On acceptance, CP sends StopTransaction with `reason:"Remote"`.
 
 ### A.11 SetChargingProfile
 
-**CSMS -> CP (Call)**
+**CSMS -> CP (Call)** — current-based (Amperes):
 ```json
 [2, "msg-103", "SetChargingProfile", {
   "connectorId": 1,
@@ -1168,6 +1340,28 @@ On acceptance, CP sends StopTransaction with `reason:"Remote"`.
 }]
 ```
 
+**CSMS -> CP (Call)** — power-based (Watts):
+```json
+[2, "msg-103", "SetChargingProfile", {
+  "connectorId": 1,
+  "csChargingProfiles": {
+    "chargingProfileId": 1,
+    "stackLevel": 0,
+    "chargingProfilePurpose": "TxDefaultProfile",
+    "chargingProfileKind": "Absolute",
+    "chargingSchedule": {
+      "chargingRateUnit": "W",
+      "chargingSchedulePeriod": [
+        {
+          "startPeriod": 0,
+          "limit": 11040.0
+        }
+      ]
+    }
+  }
+}]
+```
+
 **CP -> CSMS (CallResult)**
 ```json
 [3, "msg-103", {
@@ -1182,7 +1376,9 @@ On acceptance, CP sends StopTransaction with `reason:"Remote"`.
 
 `chargingRateUnit` values: `"A"` (Amperes), `"W"` (Watts).
 
-`limit`: maximum current in A or power in W per phase.
+`limit`: when unit is `"A"`, max current per phase. When unit is `"W"`, max
+total power (not per phase). The wallbox internally converts W to A using its
+known voltage and phase count.
 
 `status` values: `"Accepted"`, `"Rejected"`, `"NotSupported"`.
 
@@ -1244,33 +1440,89 @@ On acceptance, CP sends StopTransaction with `reason:"Remote"`.
 
 ### A.14 GetConfiguration
 
-**CSMS -> CP (Call)**
+**CSMS -> CP (Call)** — request specific keys:
 ```json
 [2, "msg-106", "GetConfiguration", {
   "key": ["MeterValueSampleInterval", "HeartbeatInterval"]
 }]
 ```
 
-**CP -> CSMS (CallResult)**
+**CSMS -> CP (Call)** — request all keys:
+```json
+[2, "msg-106", "GetConfiguration", {
+  "key": []
+}]
+```
+
+**CP -> CSMS (CallResult)** — full response with all keys:
 ```json
 [3, "msg-106", {
   "configurationKey": [
+    {
+      "key": "NumberOfConnectors",
+      "readonly": true,
+      "value": "1"
+    },
+    {
+      "key": "ConnectorPhaseRotation",
+      "readonly": true,
+      "value": "1.RST"
+    },
+    {
+      "key": "ChargingScheduleAllowedChargingRateUnit",
+      "readonly": true,
+      "value": "Current"
+    },
+    {
+      "key": "ChargeProfileMaxStackLevel",
+      "readonly": true,
+      "value": "3"
+    },
+    {
+      "key": "MaxChargingProfilesInstalled",
+      "readonly": true,
+      "value": "5"
+    },
+    {
+      "key": "ChargingScheduleMaxPeriods",
+      "readonly": true,
+      "value": "5"
+    },
     {
       "key": "MeterValueSampleInterval",
       "readonly": false,
       "value": "10"
     },
     {
+      "key": "MeterValuesSampledData",
+      "readonly": false,
+      "value": "Energy.Active.Import.Register,Power.Active.Import,Current.Import,Voltage"
+    },
+    {
       "key": "HeartbeatInterval",
       "readonly": false,
       "value": "60"
+    },
+    {
+      "key": "StopTransactionOnInvalidId",
+      "readonly": false,
+      "value": "true"
+    },
+    {
+      "key": "StopTransactionOnEVSideDisconnect",
+      "readonly": false,
+      "value": "true"
     }
   ],
   "unknownKey": []
 }]
 ```
 
-To get all keys, send `"key": []` or omit the `key` field.
+`readonly: true` — key cannot be changed via ChangeConfiguration.
+`readonly: false` — key can be changed via ChangeConfiguration.
+
+`ChargingScheduleAllowedChargingRateUnit`: `"Current"` means profiles use
+Amperes. If `"Current,Power"`, both A and W are supported.
 
 ---
 
@@ -1326,13 +1578,13 @@ change applied after transaction ends).
 | A.2 | Heartbeat | CP→CSMS | TC-011 |
 | A.3 | StatusNotification | CP→CSMS | TC-010, TC-100–108, TC-300–302, TC-400–407, TC-500–504 |
 | A.4 | Authorize | CP→CSMS | TC-100–105, TC-300, TC-502 (skipped in TC-106–108) |
-| A.5 | StartTransaction | CP→CSMS | TC-100–108, TC-300, TC-400–401, TC-405 |
-| A.6 | StopTransaction | CP→CSMS | TC-100–107, TC-301, TC-400–401, TC-403, TC-405, TC-501 |
+| A.5 | StartTransaction | CP→CSMS | TC-100–109, TC-300, TC-400–401, TC-405 |
+| A.6 | StopTransaction | CP→CSMS | TC-100–107, TC-109, TC-301, TC-400–401, TC-403, TC-405, TC-501 |
 | A.7 | MeterValues | CP→CSMS | TC-100–107, TC-200–203, TC-400–401, TC-406, TC-500, TC-600–601 |
 | A.8 | TriggerMessage | CSMS→CP | TC-012, TC-402, TC-500 |
-| A.9 | RemoteStartTransaction | CSMS→CP | TC-100, TC-108, TC-300, TC-302, TC-400–402 |
+| A.9 | RemoteStartTransaction | CSMS→CP | TC-100, TC-108, TC-109, TC-300, TC-302, TC-400–402 |
 | A.10 | RemoteStopTransaction | CSMS→CP | TC-301, TC-400–401, TC-403 |
-| A.11 | SetChargingProfile | CSMS→CP | TC-100–105, TC-200–203, TC-406 |
+| A.11 | SetChargingProfile | CSMS→CP | TC-100–105, TC-109, TC-200–203, TC-406 |
 | A.12 | GetCompositeSchedule | CSMS→CP | TC-202 |
 | A.13 | ChangeConfiguration | CSMS→CP | TC-014 |
 | A.14 | GetConfiguration | CSMS→CP | TC-013 |

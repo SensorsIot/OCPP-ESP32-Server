@@ -36,6 +36,65 @@ Test Wallbox (CP)                          ESP32 (CSMS)
       |                                        |
 ```
 
+### 1.3 Scope and Out-of-Scope
+
+**In scope**:
+- OCPP 1.6J over WebSocket (JSON-RPC framing)
+- Single connector (connectorId 1)
+- Charging profile control (A and W where supported)
+- MeterValues reporting and CSMS-side correction logic
+- Basic error and disconnect handling
+
+**Out of scope** (explicitly not covered by these tests):
+- TLS, certificate management, and security profiles
+- Firmware updates, diagnostics, and log uploads
+- Multi-connector charge points
+- Reservation/LocalAuthList/ClearCache workflows
+- Smart charging profiles beyond single-period schedules
+
+### 1.4 Terminology
+
+| Term | Meaning |
+|------|---------|
+| **CP** | Charge Point (the simulated wallbox) |
+| **CSMS** | Central System (ESP32 OCPP Server) |
+| **Connector** | Physical outlet (here: connectorId 1) |
+| **Transaction** | OCPP transaction between StartTransaction and StopTransaction |
+| **Session** | User-visible charging session; maps 1:1 to a transaction in this spec |
+
+### 1.5 Environment Assumptions
+
+- Nominal line voltage is **230 V** for all phase calculations unless explicitly stated.
+- All timestamps are in **UTC** and formatted as ISO 8601 (e.g., `2026-01-31T12:00:00.000Z`).
+- The simulator uses the configuration in Section 6 unless a test overrides it.
+- The CSMS firmware/build under test should be recorded when executing this plan.
+
+### 1.6 Test Case Conventions
+
+**Required fields** (implicit unless a test says otherwise):
+- **Preconditions**: initial CP state, phase mode, and relevant configuration keys.
+- **Steps**: ordered message flow.
+- **Expected**: measurable outputs (status, meter values, MQTT topics).
+- **Pass/Fail**: a single-line acceptance condition.
+
+**Default timing rules** (unless a test overrides):
+- CP responses to CSMS calls: **≤ 5 seconds**.
+- StatusNotification after a state change: **≤ 5 seconds**.
+- MeterValues interval: **`MeterValueSampleInterval` ± 1 second**.
+- Charging profile application: **≤ 5 seconds**.
+
+**Default tolerance rules** (unless a test overrides):
+- Power/energy/current/voltage values are **±5%**.
+- Use raw values as reported by the CP; CSMS corrections are applied only where stated.
+- When applying the 1-phase correction factor, divide by 3 and **round to nearest whole unit** (W/Wh).
+
+### 1.7 How to Execute
+
+1. Start the ESP32 CSMS build under test and record its firmware version/commit.
+2. Start the Python Test Wallbox with the configuration in Section 6.
+3. Follow the test execution order in Section 7.
+4. Capture logs from both CP and CSMS, plus MQTT outputs if applicable.
+
 ## 2. OCPP Message Reference
 
 ### 2.1 CP -> CSMS (Charge Point initiates)
@@ -63,6 +122,14 @@ Test Wallbox (CP)                          ESP32 (CSMS)
 | GetConfiguration | Read CP config keys | key[] |
 | ChangeAvailability | Enable/disable connector | connectorId, type |
 | Reset | Soft/hard reset | type |
+
+### 2.3 Timing and Tolerance Defaults
+
+These defaults apply to all tests unless a test overrides them:
+- **Response time**: ≤ 5 seconds for CallResults.
+- **MeterValues cadence**: `MeterValueSampleInterval` ± 1 second.
+- **Profile application**: ≤ 5 seconds from SetChargingProfile.conf.
+- **Measurement tolerance**: ±5% for power, current, voltage, and energy.
 
 ## 3. Charge Point Behavior Model
 
@@ -111,7 +178,10 @@ The wallbox reports these measurands in MeterValues (as seen in evcc traces):
 
 **Important**: The wallbox always reports values as if in 3-phase mode. When
 operating in 1-phase mode, only L1 carries current, but some wallboxes still
-report 3-phase-equivalent values. The CSMS applies the correction factor.
+report 3-phase-equivalent values. In this simulator, **power and energy are
+reported as 3-phase-equivalent totals even in 1-phase mode**, while L2/L3
+currents are zero. The CSMS applies a /3 correction factor when 1-phase mode is
+active.
 
 ### 3.3 Charging Profile Response
 
@@ -128,9 +198,31 @@ When the CSMS sends GetCompositeSchedule, the CP:
 
 ## 4. Test Cases
 
+### 4.0 Common Test Rules
+
+**Preconditions**: Unless otherwise noted, tests assume:
+- CP is connected and in **Available**.
+- `HeartbeatInterval=60`, `MeterValueSampleInterval=10`.
+- Charging rate unit configured per TC-015/TC-016.
+
+**MQTT expectations** (for tests that publish MQTT):
+- Topics follow `ocpp/{cpId}/...` as shown in Section 4.5.
+- Payloads contain **both** raw and corrected values where applicable.
+- MQTT publication occurs within **≤ 2 seconds** of the source OCPP message.
+
+**Pass/Fail**: A test passes only if all required messages arrive in order,
+with expected payloads and timing.
+
 ### 4.1 Connection and Registration
 
 #### TC-010: Boot and Registration
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify basic OCPP connection handshake.
 
@@ -145,6 +237,13 @@ When the CSMS sends GetCompositeSchedule, the CP:
 
 #### TC-011: Heartbeat Keepalive
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | | | Wait `interval` seconds after boot |
@@ -155,6 +254,13 @@ When the CSMS sends GetCompositeSchedule, the CP:
 
 #### TC-012: TriggerMessage (State Sync)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | CSMS->CP | TriggerMessage | `requestedMessage:"StatusNotification"` |
@@ -164,6 +270,13 @@ When the CSMS sends GetCompositeSchedule, the CP:
 **Pass**: CP responds to trigger within 5 seconds.
 
 #### TC-013: GetConfiguration
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
@@ -193,13 +306,79 @@ wallbox reports.
 
 #### TC-014: ChangeConfiguration (Meter Interval)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | CSMS->CP | ChangeConfiguration | `key:"MeterValueSampleInterval"`, `value:"10"` |
 | 2 | CP->CSMS | ChangeConfiguration.conf | `status:"Accepted"` |
 | 3 | | | CP now reports MeterValues every 10 seconds |
 
+#### TC-017: ChangeConfiguration Unknown Key (Negative)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1 | CSMS->CP | ChangeConfiguration | `key:"UnknownConfigKey"`, `value:"123"` |
+| 2 | CP->CSMS | ChangeConfiguration.conf | `status:"NotSupported"` |
+
+**Pass**: CP rejects unknown keys with `NotSupported` and keeps previous config.
+
+#### TC-018: ChangeConfiguration Read-Only Key (Negative)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1 | CSMS->CP | ChangeConfiguration | `key:"NumberOfConnectors"`, `value:"2"` |
+| 2 | CP->CSMS | ChangeConfiguration.conf | `status:"Rejected"` |
+| 3 | CSMS->CP | GetConfiguration | `key:["NumberOfConnectors"]` |
+| 4 | CP->CSMS | GetConfiguration.conf | `value:"1"` unchanged |
+
+**Pass**: Read-only keys are rejected and unchanged.
+
+#### TC-019: ChangeConfiguration Invalid Value (Negative)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1 | CSMS->CP | ChangeConfiguration | `key:"MeterValueSampleInterval"`, `value:"abc"` |
+| 2 | CP->CSMS | ChangeConfiguration.conf | `status:"Rejected"` |
+| 3 | CSMS->CP | GetConfiguration | `key:["MeterValueSampleInterval"]` |
+| 4 | CP->CSMS | GetConfiguration.conf | `value` unchanged from prior setting |
+
+**Pass**: Invalid values are rejected and configuration remains unchanged.
+
 #### TC-015: Configure Charging Rate Unit — Current (A)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Set the wallbox to accept charging profiles in Amperes.
 This must be done before running TC-100–TC-105 current-based tests.
@@ -216,6 +395,13 @@ This must be done before running TC-100–TC-105 current-based tests.
 
 #### TC-016: Configure Charging Rate Unit — Power (W)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Set the wallbox to accept charging profiles in Watts.
 This must be done before running TC-110–TC-115 power-based tests.
 
@@ -230,11 +416,57 @@ This must be done before running TC-110–TC-115 power-based tests.
 **Pass**: Wallbox accepts power-based profile and charges at requested Watts.
 If the wallbox only supports `"Current"`, step 3 returns `status:"Rejected"`.
 
+#### TC-020: SetChargingProfile Above Max Current (Negative)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
+**Purpose**: Verify CP rejects a profile that exceeds its max current.
+
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1 | CSMS->CP | GetConfiguration | `key:["NumberOfConnectors"]` (optional) |
+| 2 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"A"`, `limit:40.0` (exceeds `max_current_a:32`) |
+| 3 | CP->CSMS | SetChargingProfile.conf | `status:"Rejected"` |
+
+**Pass**: CP rejects profiles above its configured current limit.
+
+#### TC-021: SetChargingProfile Unsupported Unit (Negative)
+
+| Field | Value |
+|------|-------|
+| Preconditions | `ChargingScheduleAllowedChargingRateUnit` is `"Current"` only. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
+**Purpose**: Verify CP rejects power-based profiles when only current is supported.
+
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1 | CSMS->CP | GetConfiguration | `key:["ChargingScheduleAllowedChargingRateUnit"]` |
+| 2 | CP->CSMS | GetConfiguration.conf | `value:"Current"` |
+| 3 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:11040.0` |
+| 4 | CP->CSMS | SetChargingProfile.conf | `status:"NotSupported"` |
+
+**Pass**: CP returns `NotSupported` for unsupported charging rate units.
+
 ---
 
 ### 4.2 Charging Sessions
 
 #### TC-100: Charge at 11 kW (3-phase, 16A, 11.04 kW)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Full charge cycle at nominal 3-phase residential power.
 
@@ -277,6 +509,13 @@ transitions correct.
 
 #### TC-101: Charge at 3.7 kW (1-phase, 16A, 3.68 kW)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Full charge cycle at 1-phase residential power.
 
 **Setup**: Phase mode = 1-phase, max current = 16A.
@@ -308,6 +547,13 @@ Same flow as TC-100, but with:
 
 #### TC-106: Charge at 11 kW Without Authorization (3-phase, 16A, 11.04 kW)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Verify charge cycle when CP skips the Authorize step entirely
 (free charging mode / no RFID required).
 
@@ -337,6 +583,13 @@ transaction based on StartTransaction alone.
 
 #### TC-107: Charge at 3.7 kW Without Authorization (1-phase, 16A, 3.68 kW)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Same as TC-106 but in 1-phase mode.
 
 Same flow as TC-106 with 1-phase setup. Meter values follow TC-101 pattern
@@ -345,6 +598,13 @@ Same flow as TC-106 with 1-phase setup. Meter values follow TC-101 pattern
 **Pass**: 1-phase free charging works without Authorize step.
 
 #### TC-108: Remote Start Without Authorization Step
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify that RemoteStartTransaction can directly trigger
 StartTransaction without a separate Authorize call.
@@ -370,6 +630,13 @@ to StartTransaction.
 
 #### TC-102: Charge at 7 kW (3-phase, 10A, 6.9 kW)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Verify mid-range 3-phase charging via SetChargingProfile.
 
 | Step | Direction | Message | Check |
@@ -392,6 +659,13 @@ to StartTransaction.
 **Pass**: Power at ~6.9 kW within 10 seconds of profile change.
 
 #### TC-103: Charge at 4.1 kW (3-phase, 6A, 4.14 kW) — Phase Switch Threshold
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify charging at the exact phase switch threshold boundary.
 At 3-phase 6A the power is 4.14 kW — this is the minimum 3-phase current and
@@ -418,6 +692,13 @@ the boundary where the CSMS decides between 1-phase and 3-phase mode.
 
 #### TC-104: Charge at 2 kW (1-phase, 8.7A, 2.0 kW)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Verify low-power 1-phase charging.
 
 **Setup**: Phase mode = 1-phase, CSMS target power = 2 kW.
@@ -442,6 +723,13 @@ the boundary where the CSMS decides between 1-phase and 3-phase mode.
 **Pass**: CSMS-corrected power ≈ 2 kW.
 
 #### TC-105: Charge at 0 kW (Suspend, 0A, 0 kW)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify charging suspends cleanly when limit is set to zero.
 
@@ -481,6 +769,13 @@ Energy meter stops during suspension and resumes after.
 
 #### TC-109: Charge at 0 kW — Wallbox Stops Transaction (0A, 0 kW)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Some wallboxes stop the transaction entirely when they receive a
 0A charging profile instead of suspending. Verify the CSMS handles this
 gracefully.
@@ -517,6 +812,13 @@ Run TC-016 first to verify the wallbox supports power-based profiles.
 
 #### TC-110: Charge at 11 kW (3-phase, 11040W)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Full charge cycle using power-based profile.
 
 **Setup**: Phase mode = 3-phase, TC-016 completed (W profiles supported).
@@ -541,6 +843,13 @@ Run TC-016 first to verify the wallbox supports power-based profiles.
 **Pass**: Wallbox converts 11040W to ~16A per phase, meter values match TC-100.
 
 #### TC-111: Charge at 3.7 kW (1-phase, 3680W)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Setup**: Phase mode = 1-phase, TC-016 completed.
 
@@ -567,6 +876,13 @@ Run TC-016 first to verify the wallbox supports power-based profiles.
 
 #### TC-112: Charge at 7 kW (3-phase, 6900W)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Setup**: Phase mode = 3-phase, TC-016 completed.
 
 | Step | Direction | Message | Payload / Check |
@@ -588,6 +904,13 @@ Run TC-016 first to verify the wallbox supports power-based profiles.
 **Pass**: Wallbox converts 6900W to ~10A per phase.
 
 #### TC-113: Charge at 4.1 kW (3-phase, 4140W)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Setup**: Phase mode = 3-phase, TC-016 completed.
 
@@ -611,6 +934,13 @@ Run TC-016 first to verify the wallbox supports power-based profiles.
 
 #### TC-114: Charge at 2 kW (1-phase, 2000W)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Setup**: Phase mode = 1-phase, TC-016 completed.
 
 | Step | Direction | Message | Payload / Check |
@@ -632,6 +962,13 @@ Run TC-016 first to verify the wallbox supports power-based profiles.
 **Pass**: Wallbox converts 2000W to ~8.7A on L1, CSMS corrects power to ~2 kW.
 
 #### TC-115: Charge at 0 kW (Suspend, 0W)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Setup**: Charging in progress, TC-016 completed.
 
@@ -678,6 +1015,13 @@ stops during suspension and resumes after.
 
 #### TC-200: Current Ramp Down During Charging
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Verify the wallbox responds to mid-session current changes.
 
 | Step | Direction | Message | Check |
@@ -695,6 +1039,13 @@ stops during suspension and resumes after.
 
 #### TC-201: Current Ramp Up During Charging
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1-12 | | | Start charging at 6A |
@@ -707,6 +1058,13 @@ stops during suspension and resumes after.
 
 #### TC-202: GetCompositeSchedule Verification
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | | | Charging at 16A with TxDefaultProfile active |
@@ -714,6 +1072,13 @@ stops during suspension and resumes after.
 | 3 | CP->CSMS | GetCompositeSchedule.conf | `status:"Accepted"`, schedule shows `limit:16.0` |
 
 #### TC-203: Rapid Limit Changes (Stress)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify stability under rapid profile changes.
 
@@ -736,6 +1101,13 @@ stops during suspension and resumes after.
 
 #### TC-300: Remote Start Transaction
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | | | CP in Available, EV plugged in (Preparing) |
@@ -749,6 +1121,13 @@ stops during suspension and resumes after.
 
 #### TC-301: Remote Stop Transaction
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | | | Charging in progress, transactionId known |
@@ -761,6 +1140,13 @@ stops during suspension and resumes after.
 
 #### TC-302: Remote Start Without EV (Rejected)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | | | CP in Available, no EV plugged in |
@@ -772,6 +1158,13 @@ stops during suspension and resumes after.
 ### 4.5 Phase Switching
 
 #### TC-400: Phase Switch 3-phase to 1-phase (Mid-Session)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify the CSMS-initiated phase switch sequence.
 
@@ -799,6 +1192,13 @@ reflect 1-phase operation.
 
 #### TC-401: Phase Switch 1-phase to 3-phase (Mid-Session)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 Same as TC-400 in reverse. After switch:
 
 | Measurand | Before (1-phase) | After (3-phase) |
@@ -809,6 +1209,13 @@ Same as TC-400 in reverse. After switch:
 | Power | ~3,680 W (corrected) | ~11,040 W |
 
 #### TC-402: Phase Switch Without Active Transaction
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify phase switch when no charging session is active.
 
@@ -827,6 +1234,13 @@ Same as TC-400 in reverse. After switch:
 MQTT phase topic shows `phase_mode:"1-phase"`.
 
 #### TC-403: Phase Switch Timeout (Wallbox Doesn't Stop)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify safe abort when wallbox fails to reach Available state.
 
@@ -847,6 +1261,13 @@ Phase mode remains 3-phase. Transaction is NOT automatically restarted.
 
 #### TC-404: Phase Switch Rejected (Already In Progress)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Verify second switch request is rejected while one is active.
 
 | Step | Direction | Message | Check |
@@ -858,6 +1279,13 @@ Phase mode remains 3-phase. Transaction is NOT automatically restarted.
 **Pass**: Second request rejected, first switch continues normally.
 
 #### TC-405: Meter Continuity Across Phase Switch
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify no energy is lost or double-counted across the switch.
 
@@ -877,6 +1305,13 @@ Phase mode remains 3-phase. Transaction is NOT automatically restarted.
 
 #### TC-406: Power Limit Change Immediately After Phase Switch
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Verify new current limit is applied right after restart.
 
 | Step | Direction | Message | Check |
@@ -894,6 +1329,13 @@ Phase mode remains 3-phase. Transaction is NOT automatically restarted.
 **Pass**: Correct current limit calculated for new phase mode and applied immediately.
 
 #### TC-407: MQTT Phase Status and Correction Factor Update
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 **Purpose**: Verify MQTT publishes reflect phase mode change correctly.
 
@@ -914,6 +1356,13 @@ published meter values use corrected power.
 
 #### TC-500: WebSocket Disconnect During Charging
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | | | Charging in progress |
@@ -929,6 +1378,13 @@ published meter values use corrected power.
 
 #### TC-501: EV Disconnect During Charging (Unexpected)
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | | | Charging in progress |
@@ -939,6 +1395,13 @@ published meter values use corrected power.
 
 #### TC-502: Authorize Rejected
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
 | 1 | CP->CSMS | Authorize | `idTag:"UNKNOWN_TAG"` |
@@ -947,6 +1410,13 @@ published meter values use corrected power.
 | 4 | CP->CSMS | StatusNotification | Remains `Preparing` or returns to `Available` |
 
 #### TC-503: SetChargingProfile to Zero (see also TC-105)
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 See TC-105 for the full suspend/resume test. This edge case verifies no fault occurs:
 
@@ -961,6 +1431,13 @@ See TC-105 for the full suspend/resume test. This edge case verifies no fault oc
 **Pass**: Wallbox suspends cleanly, no fault or error reported.
 
 #### TC-504: ChangeAvailability to Inoperative
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
@@ -978,6 +1455,13 @@ See TC-105 for the full suspend/resume test. This edge case verifies no fault oc
 
 #### TC-600: Energy Accumulation Over Time
 
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
+
 **Purpose**: Verify energy meter increments correctly.
 
 | Phase Mode | Current | Duration | Expected Energy |
@@ -990,6 +1474,13 @@ See TC-105 for the full suspend/resume test. This edge case verifies no fault oc
 elapsed_seconds / 3600, within 2% tolerance.
 
 #### TC-601: Meter Values Match Transaction Boundaries
+
+| Field | Value |
+|------|-------|
+| Preconditions | See Section 4.0 defaults; apply any Setup noted in this test. |
+| Expected | Message flow and checks in the steps/tables for this test. |
+| Pass | All required messages arrive in order within timing/tolerance limits; no unexpected errors. |
+
 
 | Check | Condition |
 |-------|-----------|
@@ -1073,8 +1564,8 @@ wallbox:
 | Priority | Test Cases | Dependency |
 |----------|------------|------------|
 | 1 | TC-010, TC-011 | None (connection basics) |
-| 2 | TC-012, TC-013, TC-014 | TC-010 (connected) |
-| 2b | TC-015, TC-016 | TC-013 (charging rate unit config) |
+| 2 | TC-012, TC-013, TC-014, TC-017, TC-018, TC-019 | TC-010 (connected) |
+| 2b | TC-015, TC-016, TC-020, TC-021 | TC-013 (charging rate unit config) |
 | 3 | TC-100, TC-101 | TC-015 (full charge cycles, current-based) |
 | 3b | TC-106, TC-107 | TC-010 (full charge cycles without auth) |
 | 3c | TC-108 | TC-106 (remote start without auth) |

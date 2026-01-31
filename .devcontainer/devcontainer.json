@@ -40,12 +40,12 @@
         "source=${localEnv:HOME}/.ssh/id_ed25519,target=/home/dev/.ssh/id_ed25519,type=bind,readonly",
         "source=${localEnv:HOME}/.git-credentials,target=/home/dev/.git-credentials,type=bind,readonly",
         "source=${localEnv:HOME}/.claude-containers/${localWorkspaceFolderBasename},target=/home/dev/.claude,type=bind",
-        "source=/dev,target=/dev,type=bind,consistency=consistent"
     ],
     "runArgs": [
         "--privileged",
         "--device-cgroup-rule=c 166:* rwm",
-        "--device-cgroup-rule=c 188:* rwm"
+        "--device-cgroup-rule=c 188:* rwm",
+        "--mount", "type=bind,src=/dev,dst=/dev,bind-propagation=rslave"
     ],
     "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && sudo npm install -g @anthropic-ai/claude-code && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && . /opt/esp-idf/export.sh"
 }

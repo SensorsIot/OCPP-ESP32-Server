@@ -704,3 +704,538 @@ wallbox:
 | 8 | TC-500, TC-501, TC-502, TC-503, TC-504 | TC-100 (error cases) |
 | 9 | TC-600, TC-601 | TC-100 (metering accuracy) |
 | 10 | TC-203 | TC-200 (stress) |
+
+---
+
+## Appendix A: OCPP 1.6J Message Format Reference
+
+All messages use the OCPP 1.6J JSON-RPC framing over WebSocket:
+
+```
+Call:       [2, "<messageId>", "<action>", {<payload>}]
+CallResult: [3, "<messageId>", {<payload>}]
+CallError:  [4, "<messageId>", "<errorCode>", "<errorDescription>", {<details>}]
+```
+
+`messageId` is a unique string per request (UUID or incrementing ID). The
+corresponding `CallResult` or `CallError` uses the same `messageId`.
+
+---
+
+### A.1 BootNotification
+
+**CP -> CSMS (Call)**
+```json
+[2, "1", "BootNotification", {
+  "chargePointVendor": "TestWallbox",
+  "chargePointModel": "TWB-22",
+  "chargePointSerialNumber": "SIM001",
+  "firmwareVersion": "1.0.0"
+}]
+```
+
+**CSMS -> CP (CallResult)**
+```json
+[3, "1", {
+  "status": "Accepted",
+  "currentTime": "2026-01-31T12:00:00.000Z",
+  "interval": 60
+}]
+```
+
+`status` values: `"Accepted"`, `"Pending"`, `"Rejected"`.
+`interval`: heartbeat interval in seconds.
+
+---
+
+### A.2 Heartbeat
+
+**CP -> CSMS (Call)**
+```json
+[2, "2", "Heartbeat", {}]
+```
+
+**CSMS -> CP (CallResult)**
+```json
+[3, "2", {
+  "currentTime": "2026-01-31T12:01:00.000Z"
+}]
+```
+
+---
+
+### A.3 StatusNotification
+
+**CP -> CSMS (Call)**
+```json
+[2, "3", "StatusNotification", {
+  "connectorId": 1,
+  "status": "Available",
+  "errorCode": "NoError",
+  "timestamp": "2026-01-31T12:00:05.000Z"
+}]
+```
+
+**CSMS -> CP (CallResult)**
+```json
+[3, "3", {}]
+```
+
+`connectorId`: `0` = charge point, `1` = connector 1.
+
+`status` values: `"Available"`, `"Preparing"`, `"Charging"`, `"SuspendedEV"`,
+`"SuspendedEVSE"`, `"Finishing"`, `"Unavailable"`, `"Faulted"`.
+
+`errorCode` values: `"NoError"`, `"ConnectorLockFailure"`, `"GroundFailure"`,
+`"HighTemperature"`, `"InternalError"`, `"OtherError"`, `"OverCurrentFailure"`,
+`"PowerMeterFailure"`, `"PowerSwitchFailure"`, `"UnderVoltage"`.
+
+---
+
+### A.4 Authorize
+
+**CP -> CSMS (Call)**
+```json
+[2, "4", "Authorize", {
+  "idTag": "evcc"
+}]
+```
+
+**CSMS -> CP (CallResult)**
+```json
+[3, "4", {
+  "idTagInfo": {
+    "status": "Accepted"
+  }
+}]
+```
+
+`idTagInfo.status` values: `"Accepted"`, `"Blocked"`, `"Expired"`, `"Invalid"`,
+`"ConcurrentTx"`.
+
+---
+
+### A.5 StartTransaction
+
+**CP -> CSMS (Call)**
+```json
+[2, "5", "StartTransaction", {
+  "connectorId": 1,
+  "idTag": "evcc",
+  "meterStart": 0,
+  "timestamp": "2026-01-31T12:00:10.000Z"
+}]
+```
+
+**CSMS -> CP (CallResult)**
+```json
+[3, "5", {
+  "transactionId": 1001,
+  "idTagInfo": {
+    "status": "Accepted"
+  }
+}]
+```
+
+`meterStart`: energy meter reading in **Wh** at transaction start.
+`transactionId`: integer assigned by CSMS, used in all subsequent messages.
+
+---
+
+### A.6 StopTransaction
+
+**CP -> CSMS (Call)**
+```json
+[2, "6", "StopTransaction", {
+  "transactionId": 1001,
+  "meterStop": 5500,
+  "timestamp": "2026-01-31T12:30:10.000Z",
+  "reason": "EVDisconnected"
+}]
+```
+
+**CSMS -> CP (CallResult)**
+```json
+[3, "6", {
+  "idTagInfo": {
+    "status": "Accepted"
+  }
+}]
+```
+
+`meterStop`: energy meter reading in **Wh** at transaction end.
+
+`reason` values: `"EmergencyStop"`, `"EVDisconnected"`, `"HardReset"`,
+`"Local"`, `"Other"`, `"PowerLoss"`, `"Reboot"`, `"Remote"`,
+`"SoftReset"`, `"UnlockCommand"`, `"DeAuthorized"`.
+
+---
+
+### A.7 MeterValues
+
+**CP -> CSMS (Call)**
+```json
+[2, "7", "MeterValues", {
+  "connectorId": 1,
+  "transactionId": 1001,
+  "meterValue": [
+    {
+      "timestamp": "2026-01-31T12:01:00.000Z",
+      "sampledValue": [
+        {
+          "value": "11040",
+          "measurand": "Power.Active.Import",
+          "unit": "W",
+          "context": "Sample.Periodic",
+          "location": "Outlet"
+        },
+        {
+          "value": "5500",
+          "measurand": "Energy.Active.Import.Register",
+          "unit": "Wh",
+          "context": "Sample.Periodic",
+          "location": "Outlet"
+        },
+        {
+          "value": "16.0",
+          "measurand": "Current.Import",
+          "unit": "A",
+          "context": "Sample.Periodic",
+          "location": "Outlet",
+          "phase": "L1"
+        },
+        {
+          "value": "16.0",
+          "measurand": "Current.Import",
+          "unit": "A",
+          "context": "Sample.Periodic",
+          "location": "Outlet",
+          "phase": "L2"
+        },
+        {
+          "value": "16.0",
+          "measurand": "Current.Import",
+          "unit": "A",
+          "context": "Sample.Periodic",
+          "location": "Outlet",
+          "phase": "L3"
+        },
+        {
+          "value": "230.0",
+          "measurand": "Voltage",
+          "unit": "V",
+          "context": "Sample.Periodic",
+          "location": "Outlet",
+          "phase": "L1"
+        },
+        {
+          "value": "230.0",
+          "measurand": "Voltage",
+          "unit": "V",
+          "context": "Sample.Periodic",
+          "location": "Outlet",
+          "phase": "L2"
+        },
+        {
+          "value": "230.0",
+          "measurand": "Voltage",
+          "unit": "V",
+          "context": "Sample.Periodic",
+          "location": "Outlet",
+          "phase": "L3"
+        }
+      ]
+    }
+  ]
+}]
+```
+
+**CSMS -> CP (CallResult)**
+```json
+[3, "7", {}]
+```
+
+**1-phase mode variant** (L2/L3 zero):
+```json
+{
+  "value": "16.0", "measurand": "Current.Import", "unit": "A", "phase": "L1"
+},
+{
+  "value": "0.0", "measurand": "Current.Import", "unit": "A", "phase": "L2"
+},
+{
+  "value": "0.0", "measurand": "Current.Import", "unit": "A", "phase": "L3"
+}
+```
+
+Notes:
+- All `value` fields are **strings** (OCPP 1.6J specification).
+- `phase` is optional; omit for aggregate values (Power, Energy).
+- `context` values: `"Sample.Periodic"`, `"Sample.Clock"`, `"Transaction.Begin"`, `"Transaction.End"`.
+- `location` values: `"Outlet"`, `"Inlet"`, `"Body"`, `"Cable"`, `"EV"`.
+
+---
+
+### A.8 TriggerMessage
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-100", "TriggerMessage", {
+  "requestedMessage": "StatusNotification"
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-100", {
+  "status": "Accepted"
+}]
+```
+
+After accepting, CP sends the requested message (e.g., StatusNotification)
+as a separate Call.
+
+`requestedMessage` values used in tests: `"BootNotification"`,
+`"Heartbeat"`, `"MeterValues"`, `"StatusNotification"`.
+
+`status` values: `"Accepted"`, `"Rejected"`, `"NotImplemented"`.
+
+---
+
+### A.9 RemoteStartTransaction
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-101", "RemoteStartTransaction", {
+  "connectorId": 1,
+  "idTag": "evcc"
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-101", {
+  "status": "Accepted"
+}]
+```
+
+`status` values: `"Accepted"`, `"Rejected"`.
+
+On acceptance, CP proceeds with Authorize -> StartTransaction flow.
+
+---
+
+### A.10 RemoteStopTransaction
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-102", "RemoteStopTransaction", {
+  "transactionId": 1001
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-102", {
+  "status": "Accepted"
+}]
+```
+
+On acceptance, CP sends StopTransaction with `reason:"Remote"`.
+
+---
+
+### A.11 SetChargingProfile
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-103", "SetChargingProfile", {
+  "connectorId": 1,
+  "csChargingProfiles": {
+    "chargingProfileId": 1,
+    "stackLevel": 0,
+    "chargingProfilePurpose": "TxDefaultProfile",
+    "chargingProfileKind": "Absolute",
+    "chargingSchedule": {
+      "chargingRateUnit": "A",
+      "chargingSchedulePeriod": [
+        {
+          "startPeriod": 0,
+          "limit": 16.0
+        }
+      ]
+    }
+  }
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-103", {
+  "status": "Accepted"
+}]
+```
+
+`chargingProfilePurpose` values: `"ChargePointMaxProfile"`,
+`"TxDefaultProfile"`, `"TxProfile"`.
+
+`chargingProfileKind` values: `"Absolute"`, `"Recurring"`, `"Relative"`.
+
+`chargingRateUnit` values: `"A"` (Amperes), `"W"` (Watts).
+
+`limit`: maximum current in A or power in W per phase.
+
+`status` values: `"Accepted"`, `"Rejected"`, `"NotSupported"`.
+
+---
+
+### A.12 GetCompositeSchedule
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-104", "GetCompositeSchedule", {
+  "connectorId": 1,
+  "duration": 60
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-104", {
+  "status": "Accepted",
+  "connectorId": 1,
+  "scheduleStart": "2026-01-31T12:00:00.000Z",
+  "chargingSchedule": {
+    "chargingRateUnit": "A",
+    "chargingSchedulePeriod": [
+      {
+        "startPeriod": 0,
+        "limit": 16.0
+      }
+    ]
+  }
+}]
+```
+
+`duration`: seconds to compute the composite schedule for.
+
+---
+
+### A.13 ChangeConfiguration
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-105", "ChangeConfiguration", {
+  "key": "MeterValueSampleInterval",
+  "value": "10"
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-105", {
+  "status": "Accepted"
+}]
+```
+
+`status` values: `"Accepted"`, `"Rejected"`, `"RebootRequired"`,
+`"NotSupported"`.
+
+---
+
+### A.14 GetConfiguration
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-106", "GetConfiguration", {
+  "key": ["MeterValueSampleInterval", "HeartbeatInterval"]
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-106", {
+  "configurationKey": [
+    {
+      "key": "MeterValueSampleInterval",
+      "readonly": false,
+      "value": "10"
+    },
+    {
+      "key": "HeartbeatInterval",
+      "readonly": false,
+      "value": "60"
+    }
+  ],
+  "unknownKey": []
+}]
+```
+
+To get all keys, send `"key": []` or omit the `key` field.
+
+---
+
+### A.15 ChangeAvailability
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-107", "ChangeAvailability", {
+  "connectorId": 1,
+  "type": "Inoperative"
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-107", {
+  "status": "Accepted"
+}]
+```
+
+`type` values: `"Operative"`, `"Inoperative"`.
+
+`status` values: `"Accepted"`, `"Rejected"`, `"Scheduled"` (if transaction active,
+change applied after transaction ends).
+
+---
+
+### A.16 Reset
+
+**CSMS -> CP (Call)**
+```json
+[2, "msg-108", "Reset", {
+  "type": "Soft"
+}]
+```
+
+**CP -> CSMS (CallResult)**
+```json
+[3, "msg-108", {
+  "status": "Accepted"
+}]
+```
+
+`type` values: `"Hard"`, `"Soft"`.
+
+---
+
+### A.17 Message ID Summary
+
+| # | Action | Direction | Used in Tests |
+|---|--------|-----------|---------------|
+| A.1 | BootNotification | CP→CSMS | TC-010, TC-500 |
+| A.2 | Heartbeat | CP→CSMS | TC-011 |
+| A.3 | StatusNotification | CP→CSMS | TC-010, TC-100–105, TC-300–302, TC-400–407, TC-500–504 |
+| A.4 | Authorize | CP→CSMS | TC-100–105, TC-300, TC-502 |
+| A.5 | StartTransaction | CP→CSMS | TC-100–105, TC-300, TC-400–401, TC-405 |
+| A.6 | StopTransaction | CP→CSMS | TC-100–105, TC-301, TC-400–401, TC-403, TC-405, TC-501 |
+| A.7 | MeterValues | CP→CSMS | TC-100–105, TC-200–203, TC-400–401, TC-406, TC-500, TC-600–601 |
+| A.8 | TriggerMessage | CSMS→CP | TC-012, TC-402, TC-500 |
+| A.9 | RemoteStartTransaction | CSMS→CP | TC-100, TC-300, TC-302, TC-400–402 |
+| A.10 | RemoteStopTransaction | CSMS→CP | TC-301, TC-400–401, TC-403 |
+| A.11 | SetChargingProfile | CSMS→CP | TC-100–105, TC-200–203, TC-406 |
+| A.12 | GetCompositeSchedule | CSMS→CP | TC-202 |
+| A.13 | ChangeConfiguration | CSMS→CP | TC-014 |
+| A.14 | GetConfiguration | CSMS→CP | TC-013 |
+| A.15 | ChangeAvailability | CSMS→CP | TC-504 |
+| A.16 | Reset | CSMS→CP | (available for future tests) |

@@ -256,6 +256,68 @@ Same flow as TC-100, but with:
 
 **Pass**: Wallbox reports raw values, CSMS publishes corrected values to MQTT.
 
+#### TC-106: Free Charging Without Authorization (3-phase, 16A)
+
+**Purpose**: Verify charge cycle when CP skips the Authorize step entirely
+(free charging mode / no RFID required).
+
+**Setup**: Phase mode = 3-phase, CSMS configured to accept any idTag in
+StartTransaction (no separate Authorize needed).
+
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1 | | | CP in Available state |
+| 2 | | | *Simulate EV plug-in* |
+| 3 | CP->CSMS | StatusNotification | `connectorId:1`, `status:"Preparing"` |
+| 4 | CP->CSMS | StartTransaction | `connectorId:1`, `idTag:"freecharge"`, `meterStart:0` |
+| 5 | CSMS->CP | StartTransaction.conf | `transactionId` assigned, `idTagInfo.status:"Accepted"` |
+| 6 | CP->CSMS | StatusNotification | `connectorId:1`, `status:"Charging"` |
+| 7 | CSMS->CP | SetChargingProfile | `limit:16.0`, `chargingRateUnit:"A"` |
+| 8 | CP->CSMS | MeterValues | `Power.Active.Import: ~11040W` |
+| 9 | | | *Simulate EV unplug* |
+| 10 | CP->CSMS | StopTransaction | `transactionId`, `meterStop`, `reason:"EVDisconnected"` |
+| 11 | CP->CSMS | StatusNotification | `status:"Finishing"` then `"Available"` |
+
+**Key difference from TC-100**: No Authorize call (step 6-7 of TC-100 skipped).
+The CP sends StartTransaction directly. The CSMS accepts or rejects via
+`idTagInfo` in StartTransaction.conf.
+
+**Pass**: Transaction completes without Authorize step. CSMS accepts the
+transaction based on StartTransaction alone.
+
+#### TC-107: Free Charging Without Authorization (1-phase, 16A)
+
+**Purpose**: Same as TC-106 but in 1-phase mode.
+
+Same flow as TC-106 with 1-phase setup. Meter values follow TC-101 pattern
+(L1 only, CSMS applies /3 correction).
+
+**Pass**: 1-phase free charging works without Authorize step.
+
+#### TC-108: Remote Start Without Authorization Step
+
+**Purpose**: Verify that RemoteStartTransaction can directly trigger
+StartTransaction without a separate Authorize call.
+
+**Note**: When the CSMS initiates the charge via RemoteStartTransaction, the
+authorization is implicit — the CSMS already decided to start. The CP may
+skip the Authorize call and proceed directly to StartTransaction.
+
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1 | | | CP in Preparing (EV plugged in) |
+| 2 | CSMS->CP | RemoteStartTransaction | `connectorId:1`, `idTag:"evcc"` |
+| 3 | CP->CSMS | RemoteStartTransaction.conf | `status:"Accepted"` |
+| 4 | CP->CSMS | StartTransaction | `connectorId:1`, `idTag:"evcc"`, `meterStart:0` |
+| 5 | CSMS->CP | StartTransaction.conf | `transactionId` assigned, `idTagInfo.status:"Accepted"` |
+| 6 | CP->CSMS | StatusNotification | `status:"Charging"` |
+
+**Key difference from TC-300**: No Authorize call between RemoteStart acceptance
+and StartTransaction. The `idTag` from RemoteStartTransaction is passed directly
+to StartTransaction.
+
+**Pass**: Transaction starts without separate Authorize. CSMS assigns transactionId.
+
 #### TC-102: Charge at Reduced Current (3-phase, 8A, ~5.5 kW)
 
 **Purpose**: Verify current limiting via SetChargingProfile.
@@ -694,8 +756,10 @@ wallbox:
 |----------|------------|------------|
 | 1 | TC-010, TC-011 | None (connection basics) |
 | 2 | TC-012, TC-013, TC-014 | TC-010 (connected) |
-| 3 | TC-100, TC-101 | TC-010 (full charge cycles) |
-| 4 | TC-300, TC-301 | TC-100 (remote control) |
+| 3 | TC-100, TC-101 | TC-010 (full charge cycles with auth) |
+| 3b | TC-106, TC-107 | TC-010 (full charge cycles without auth) |
+| 3c | TC-108 | TC-106 (remote start without auth) |
+| 4 | TC-300, TC-301 | TC-100 (remote control with auth) |
 | 5 | TC-200, TC-201, TC-202 | TC-100 (dynamic power) |
 | 6 | TC-102, TC-103, TC-104, TC-105 | TC-200 (power variants) |
 | 7 | TC-400, TC-401, TC-402 | TC-300 (phase switching basics) |
@@ -1225,13 +1289,13 @@ change applied after transaction ends).
 |---|--------|-----------|---------------|
 | A.1 | BootNotification | CP→CSMS | TC-010, TC-500 |
 | A.2 | Heartbeat | CP→CSMS | TC-011 |
-| A.3 | StatusNotification | CP→CSMS | TC-010, TC-100–105, TC-300–302, TC-400–407, TC-500–504 |
-| A.4 | Authorize | CP→CSMS | TC-100–105, TC-300, TC-502 |
-| A.5 | StartTransaction | CP→CSMS | TC-100–105, TC-300, TC-400–401, TC-405 |
-| A.6 | StopTransaction | CP→CSMS | TC-100–105, TC-301, TC-400–401, TC-403, TC-405, TC-501 |
-| A.7 | MeterValues | CP→CSMS | TC-100–105, TC-200–203, TC-400–401, TC-406, TC-500, TC-600–601 |
+| A.3 | StatusNotification | CP→CSMS | TC-010, TC-100–108, TC-300–302, TC-400–407, TC-500–504 |
+| A.4 | Authorize | CP→CSMS | TC-100–105, TC-300, TC-502 (skipped in TC-106–108) |
+| A.5 | StartTransaction | CP→CSMS | TC-100–108, TC-300, TC-400–401, TC-405 |
+| A.6 | StopTransaction | CP→CSMS | TC-100–107, TC-301, TC-400–401, TC-403, TC-405, TC-501 |
+| A.7 | MeterValues | CP→CSMS | TC-100–107, TC-200–203, TC-400–401, TC-406, TC-500, TC-600–601 |
 | A.8 | TriggerMessage | CSMS→CP | TC-012, TC-402, TC-500 |
-| A.9 | RemoteStartTransaction | CSMS→CP | TC-100, TC-300, TC-302, TC-400–402 |
+| A.9 | RemoteStartTransaction | CSMS→CP | TC-100, TC-108, TC-300, TC-302, TC-400–402 |
 | A.10 | RemoteStopTransaction | CSMS→CP | TC-301, TC-400–401, TC-403 |
 | A.11 | SetChargingProfile | CSMS→CP | TC-100–105, TC-200–203, TC-406 |
 | A.12 | GetCompositeSchedule | CSMS→CP | TC-202 |

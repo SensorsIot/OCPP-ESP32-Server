@@ -344,26 +344,49 @@ to StartTransaction.
 
 **CSMS corrected**: ~2,300 W actual (6900 / 3).
 
-#### TC-104: Charge at Maximum Current (3-phase, 32A, ~22 kW)
+#### TC-104: Charge at Low Power (1-phase, ~8.7A, ~2 kW)
 
-**Purpose**: Verify maximum power delivery.
+**Purpose**: Verify low-power 1-phase charging.
 
-Same flow as TC-100 with `limit:32.0`:
+**Setup**: Phase mode = 1-phase, CSMS target power = 2 kW.
 
-**Expected meter values (3-phase, 32A)**:
-| Measurand | Value |
-|-----------|-------|
-| Power.Active.Import | ~22,080 W |
-| Current.Import (each) | ~32 A |
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1-10 | | | Same as TC-101 steps 1-10 |
+| 11 | CSMS->CP | SetChargingProfile | `limit:8.7`, `chargingRateUnit:"A"` |
+| 12 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 13 | CP->CSMS | MeterValues | `Power.Active.Import: ~6003W` (raw), `Current.Import L1: ~8.7A` |
 
-#### TC-105: Charge at Maximum Current (1-phase, 32A, ~7.4 kW)
+**Expected meter values (1-phase, 8.7A)**:
+| Measurand | Raw (wallbox) | Corrected (CSMS) | Calculation |
+|-----------|---------------|------------------|-------------|
+| Power.Active.Import | ~6,003 W | ~2,001 W | 230 x 8.7 x 3 raw, /3 corrected |
+| Current.Import (L1) | ~8.7 A | ~8.7 A | |
+| Current.Import (L2) | 0 A | 0 A | |
+| Current.Import (L3) | 0 A | 0 A | |
 
-Same flow as TC-101 with `limit:32.0`:
+**Pass**: CSMS-corrected power ≈ 2 kW.
 
-| Measurand | Raw (wallbox) | Corrected (CSMS) |
-|-----------|---------------|------------------|
-| Power.Active.Import | ~22,080 W | ~7,360 W |
-| Current.Import (L1) | ~32 A | ~32 A |
+#### TC-105: Suspend Charging (0 kW)
+
+**Purpose**: Verify charging suspends cleanly when limit is set to zero.
+
+**Setup**: Charging in progress at any power level.
+
+| Step | Direction | Message | Check |
+|------|-----------|---------|-------|
+| 1-12 | | | Charging at 16A (TC-100 steps 1-12) |
+| 13 | CSMS->CP | SetChargingProfile | `limit:0.0`, `chargingRateUnit:"A"` |
+| 14 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 15 | CP->CSMS | StatusNotification | `status:"SuspendedEVSE"` |
+| 16 | CP->CSMS | MeterValues | `Power.Active.Import: 0W`, `Current.Import: 0A` |
+| 17 | | | *Energy meter stops incrementing* |
+| 18 | CSMS->CP | SetChargingProfile | `limit:16.0`, `chargingRateUnit:"A"` |
+| 19 | CP->CSMS | StatusNotification | `status:"Charging"` |
+| 20 | CP->CSMS | MeterValues | `Power.Active.Import: ~11040W` (resumes) |
+
+**Pass**: Charging suspends at 0A (no fault), resumes when limit restored.
+Energy meter does not increment during suspension.
 
 ---
 
@@ -639,7 +662,9 @@ published meter values use corrected power.
 | 3 | | | CP does NOT start transaction |
 | 4 | CP->CSMS | StatusNotification | Remains `Preparing` or returns to `Available` |
 
-#### TC-503: SetChargingProfile Below Minimum
+#### TC-503: SetChargingProfile to Zero (see also TC-105)
+
+See TC-105 for the full suspend/resume test. This edge case verifies no fault occurs:
 
 | Step | Direction | Message | Check |
 |------|-----------|---------|-------|
@@ -647,9 +672,9 @@ published meter values use corrected power.
 | 2 | CSMS->CP | SetChargingProfile | `limit:0.0` A |
 | 3 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
 | 4 | CP->CSMS | StatusNotification | `status:"SuspendedEVSE"` (no power offered) |
-| 5 | CP->CSMS | MeterValues | Power: 0 W, Current: 0 A |
+| 5 | | | CP does NOT send `errorCode`, no fault state |
 
-**Pass**: Wallbox suspends charging, does not fault.
+**Pass**: Wallbox suspends cleanly, no fault or error reported.
 
 #### TC-504: ChangeAvailability to Inoperative
 
@@ -674,9 +699,8 @@ published meter values use corrected power.
 | Phase Mode | Current | Duration | Expected Energy |
 |------------|---------|----------|-----------------|
 | 3-phase | 16 A | 1 hour | ~11.04 kWh |
-| 3-phase | 32 A | 1 hour | ~22.08 kWh |
 | 1-phase | 16 A | 1 hour | ~3.68 kWh (corrected) |
-| 1-phase | 32 A | 1 hour | ~7.36 kWh (corrected) |
+| 1-phase | 8.7 A | 1 hour | ~2.00 kWh (corrected) |
 
 **Check**: `Energy.Active.Import.Register` increments = `Power.Active.Import` x
 elapsed_seconds / 3600, within 2% tolerance.
@@ -697,25 +721,22 @@ elapsed_seconds / 3600, within 2% tolerance.
 
 | Current (A) | Power (W) | Power (kW) | Calculation |
 |-------------|-----------|------------|-------------|
+| 0 | 0 | 0.0 | Suspended |
 | 6 | 4,140 | 4.1 | 3 x 230 x 6 |
 | 8 | 5,520 | 5.5 | 3 x 230 x 8 |
 | 10 | 6,900 | 6.9 | 3 x 230 x 10 |
-| 12 | 8,280 | 8.3 | 3 x 230 x 12 |
-| 14 | 9,660 | 9.7 | 3 x 230 x 14 |
 | 16 | 11,040 | 11.0 | 3 x 230 x 16 |
-| 20 | 13,800 | 13.8 | 3 x 230 x 20 |
-| 24 | 16,560 | 16.6 | 3 x 230 x 24 |
-| 32 | 22,080 | 22.1 | 3 x 230 x 32 |
 
 ### 5.2 1-Phase Power at Various Currents
 
 | Current (A) | Raw Wallbox (W) | CSMS Corrected (W) | Corrected (kW) |
 |-------------|-----------------|---------------------|----------------|
+| 0 | 0 | 0 | 0.0 |
 | 6 | 4,140 | 1,380 | 1.4 |
 | 8 | 5,520 | 1,840 | 1.8 |
+| 8.7 | 6,003 | 2,001 | 2.0 |
 | 10 | 6,900 | 2,300 | 2.3 |
 | 16 | 11,040 | 3,680 | 3.7 |
-| 32 | 22,080 | 7,360 | 7.4 |
 
 ### 5.3 Phase Switch Threshold
 

@@ -42,25 +42,16 @@ esp_err_t gpio_control_init(gpio_config_btn_cb_t config_btn_cb)
 {
     s_btn_cb = config_btn_cb;
 
-    /* Relay outputs — default to 1-phase (relays 2 & 3 off) */
-    const gpio_num_t relay_pins[] = {
-        PIN_RELAY_PHASE1, PIN_RELAY_PHASE2, PIN_RELAY_PHASE3
+    /* Single relay output for L2+L3 — default OFF (1-phase) */
+    gpio_config_t relay_io = {
+        .pin_bit_mask = 1ULL << PIN_RELAY_PHASE23,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
-    for (int i = 0; i < 3; i++) {
-        gpio_config_t io = {
-            .pin_bit_mask = 1ULL << relay_pins[i],
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_up_en = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
-        };
-        ESP_ERROR_CHECK(gpio_config(&io));
-    }
-    /* Phase 1 relay is normally closed — GPIO doesn't control it directly,
-       but we set the output high for consistency */
-    gpio_set_level(PIN_RELAY_PHASE1, 1);
-    gpio_set_level(PIN_RELAY_PHASE2, 0);
-    gpio_set_level(PIN_RELAY_PHASE3, 0);
+    ESP_ERROR_CHECK(gpio_config(&relay_io));
+    gpio_set_level(PIN_RELAY_PHASE23, 0);
     s_phase_mode = PHASE_MODE_1;
 
     /* Phase sense input (GPIO 34 is input-only) */
@@ -91,22 +82,20 @@ esp_err_t gpio_control_init(gpio_config_btn_cb_t config_btn_cb)
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_btn_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(s_btn_timer, BTN_POLL_US));
 
-    ESP_LOGI(TAG, "GPIO control initialised (1-phase default, button polling)");
+    ESP_LOGI(TAG, "GPIO control initialised (1-phase default, single relay for L2+L3)");
     return ESP_OK;
 }
 
 esp_err_t gpio_set_phase_mode(phase_mode_t mode)
 {
     if (mode == PHASE_MODE_3) {
-        gpio_set_level(PIN_RELAY_PHASE2, 1);
-        gpio_set_level(PIN_RELAY_PHASE3, 1);
+        gpio_set_level(PIN_RELAY_PHASE23, 1);
         s_phase_mode = PHASE_MODE_3;
-        ESP_LOGI(TAG, "Phase mode set to 3-phase (relays 2+3 ON)");
+        ESP_LOGI(TAG, "Phase mode set to 3-phase (L2+L3 relay ON)");
     } else {
-        gpio_set_level(PIN_RELAY_PHASE2, 0);
-        gpio_set_level(PIN_RELAY_PHASE3, 0);
+        gpio_set_level(PIN_RELAY_PHASE23, 0);
         s_phase_mode = PHASE_MODE_1;
-        ESP_LOGI(TAG, "Phase mode set to 1-phase (relays 2+3 OFF)");
+        ESP_LOGI(TAG, "Phase mode set to 1-phase (L2+L3 relay OFF)");
     }
     return ESP_OK;
 }

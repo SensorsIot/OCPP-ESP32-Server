@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.1 |
+| Version | 1.3 |
 | Status | Draft |
 | Created | 2026-01-25 |
 | Updated | 2026-01-25 |
@@ -49,7 +49,7 @@ Network Separation:
 4. Provide captive portal for easy credential configuration
 5. Support OTA firmware updates for field maintenance
 6. Minimize resource usage for stable long-term operation
-7. Support single wallbox connection (expandable to multiple)
+7. Support single wallbox connection
 
 ## 2. Hardware Requirements
 
@@ -61,7 +61,7 @@ Network Separation:
 | Ethernet | W5500 SPI Ethernet module (for wallbox) |
 | WiFi | Built-in ESP32 WiFi (for MQTT) |
 | Flash | 4MB |
-| PSRAM | Optional but recommended (4-8MB) |
+| PSRAM | none |
 | Power | 5V DC via USB or barrel jack |
 
 ### 2.2 Network Architecture
@@ -96,17 +96,9 @@ Network Separation:
 
 ### 2.3 Recommended Hardware Configurations
 
-#### Option A: ESP32 DevKit + W5500 Module (Recommended)
-- ESP32-WROOM-32 or ESP32-S3 DevKit
-- W5500 Ethernet module (SPI interface)
-- More flexible pin assignment
-- Widely available, low cost
-
-#### Option B: Custom PCB
-- ESP32-WROOM module
-- Integrated W5500
-- RJ45 connector for wallbox
-- External antenna for WiFi (optional)
+#### WT32-ETH01 Module incl W5500
+- ESP32-WROOM-32
+- W5500 Ethernet module 
 
 ### 2.4 Pin Assignments
 
@@ -119,17 +111,10 @@ Network Separation:
 | ETH_CS | 5 | Chip Select |
 | ETH_INT | 4 | Interrupt (optional) |
 | ETH_RST | 21 | Reset (optional) |
-| **Status LEDs** |||
-| LED_STATUS | 2 | Onboard LED (system status) |
-| LED_OCPP | 15 | OCPP/Ethernet connection |
-| LED_WIFI | 16 | WiFi connection status |
-| LED_MQTT | 17 | MQTT connection status |
 | **User Input** |||
 | BTN_CONFIG | 0 | Boot button (hold for config mode) |
 | **Phase Switching** |||
-| RELAY_PHASE_1 | 25 | Phase 1 enable (always on when charging) |
-| RELAY_PHASE_2 | 26 | Phase 2 enable relay |
-| RELAY_PHASE_3 | 27 | Phase 3 enable relay |
+| RELAY_PHASE23 | 25 | L2+L3 enable relay (NO; L1 always connected) |
 | PHASE_SENSE | 34 | Phase configuration feedback (input) |
 
 ### 2.5 Flash Partition Layout (OTA Support)
@@ -200,15 +185,15 @@ Network Separation:
 │                                        └────────────────────────────────┘ │
 ├───────────────────────────────────────────────────────────────────────────┤
 │                           Shared Services                                  │
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐             │
-│  │  Config    │ │   LED      │ │   NTP      │ │   Logger   │             │
-│  │  Manager   │ │  Status    │ │   Sync     │ │            │             │
-│  └────────────┘ └────────────┘ └────────────┘ └────────────┘             │
+│  ┌────────────┐ ┌────────────┐ ┌────────────┐                             │
+│  │  Config    │ │   NTP      │ │   Logger   │                             │
+│  │  Manager   │ │   Sync     │ │            │                             │
+│  └────────────┘ └────────────┘ └────────────┘                             │
 ├───────────────────────────────────────────────────────────────────────────┤
 │                        Hardware Abstraction                                │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
-│  │  W5500 SPI  │  │  WiFi PHY   │  │    LEDs     │  │  NVS/LittleFS│     │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘      │
+│  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐     │
+│  │  W5500 SPI  │  │  WiFi PHY   │  │ Phase Relay   │  │  NVS/LittleFS│    │
+│  └─────────────┘  └─────────────┘  └──────────────┘  └─────────────┘     │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -264,7 +249,7 @@ Network Separation:
 #### 4.1.1 Ethernet Connection (Wallbox Network)
 - **ETH-001**: System SHALL initialize W5500 Ethernet on boot
 - **ETH-002**: System SHALL use static IP for Ethernet (default: 192.168.4.1)
-- **ETH-003**: System SHALL monitor link status and indicate via LED
+- **ETH-003**: System SHALL monitor link status and log changes
 - **ETH-004**: System SHALL support configurable static IP settings
 - **ETH-005**: Ethernet network SHALL be isolated from WiFi network in Normal mode
 - **ETH-006**: OCPP WebSocket server SHALL bind to Ethernet interface in Normal mode
@@ -274,7 +259,7 @@ Network Separation:
 - **WIFI-001**: System SHALL connect to configured WiFi network in STA mode
 - **WIFI-002**: WiFi credentials SHALL be stored encrypted in NVS
 - **WIFI-003**: System SHALL automatically reconnect on WiFi disconnect
-- **WIFI-004**: System SHALL indicate WiFi connection status via LED
+- **WIFI-004**: System SHALL log WiFi connection status changes
 - **WIFI-005**: System SHALL support WPA2/WPA3 authentication
 - **WIFI-006**: MQTT client SHALL only use WiFi interface
 - **WIFI-007**: System SHALL sync time via NTP over WiFi
@@ -283,7 +268,7 @@ Network Separation:
 - **AP-001**: System SHALL start AP mode when no valid WiFi config exists
 - **AP-002**: System SHALL start AP mode when BTN_CONFIG held for 5 seconds
 - **AP-003**: AP SHALL use SSID format: `OCPP-ESP32-{MAC_LAST_4}`
-- **AP-004**: AP SHALL use configurable password (default: `ocpp12345`)
+- **AP-004**: AP SHALL use open authentication (no password) for easy initial setup
 - **AP-005**: AP SHALL assign IP 192.168.1.1 to clients
 - **AP-006**: System MAY run AP and STA concurrently (fallback mode)
 
@@ -291,7 +276,7 @@ Network Separation:
 - **TEST-001**: System SHALL support a "Test mode" configurable via captive portal or NVS
 - **TEST-002**: In Test mode, WebSocket server SHALL listen on ALL interfaces (ETH + WiFi)
 - **TEST-003**: In Test mode, wallbox emulator MAY connect via WiFi instead of Ethernet
-- **TEST-004**: Test mode SHALL be indicated by rapid alternating LED blink pattern
+- **TEST-004**: Test mode SHALL be indicated via serial log and MQTT status
 - **TEST-005**: Test mode allows full operation without Ethernet hardware connected
 
 ```
@@ -479,7 +464,7 @@ Network Separation:
 - **MQTT-003**: System SHALL authenticate with username/password
 - **MQTT-004**: System SHALL use configurable client ID
 - **MQTT-005**: System SHALL reconnect automatically on disconnect
-- **MQTT-006**: System SHALL indicate MQTT status via LED
+- **MQTT-006**: System SHALL log MQTT connection status changes
 
 #### 4.6.2 Topic Structure
 
@@ -621,7 +606,7 @@ Wallbox                    ESP32                     MQTT/Manager
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `ap_ssid` | string | "OCPP-ESP32-XXXX" | AP network name |
-| `ap_pass` | string | "ocpp12345" | AP password |
+| `ap_pass` | string | "" | AP password (empty = open network) |
 | `ap_timeout` | uint16 | 300 | AP auto-disable (seconds, 0=never) |
 
 **OCPP Settings:**
@@ -695,7 +680,7 @@ Wallbox                    ESP32                     MQTT/Manager
 - **OTA-011**: System SHALL support rollback to previous firmware on boot failure
 - **OTA-012**: System SHALL preserve configuration across updates
 - **OTA-013**: System SHALL reject firmware larger than OTA partition
-- **OTA-014**: System SHALL indicate update progress via LED and web UI
+- **OTA-014**: System SHALL indicate update progress via web UI and serial log
 - **OTA-015**: System SHALL disable OCPP operations during update
 - **OTA-016**: System SHALL complete pending transactions before update
 
@@ -743,21 +728,23 @@ The system controls 1-phase to 3-phase switching via GPIO-controlled relays. Thi
 │   Grid Input                         To Wallbox              │
 │   ─────────                          ─────────               │
 │                                                              │
-│   L1 ●────────────[RELAY_1]────────────────────────● L1     │
-│                      (NC)                                    │
+│   L1 ●─────────────────────────────────────────────● L1     │
+│                (always connected, no relay)                  │
 │                                                              │
-│   L2 ●────────────[RELAY_2]────────────────────────● L2     │
-│                      (NO)                                    │
-│                                                              │
-│   L3 ●────────────[RELAY_3]────────────────────────● L3     │
-│                      (NO)                                    │
+│   L2 ●──────┐                                               │
+│              ├──[RELAY_PHASE23]─────────────────────● L2     │
+│   L3 ●──────┘       (NO)          ┌───────────────● L3     │
+│                                    │                         │
+│                    (single relay   │                         │
+│                     controls both  │                         │
+│                     L2 and L3)  ───┘                         │
 │                                                              │
 │   N  ●─────────────────────────────────────────────● N      │
 │                                                              │
 │   PE ●─────────────────────────────────────────────● PE     │
 │                                                              │
-│   NC = Normally Closed (always connected)                   │
-│   NO = Normally Open (connected when energized)             │
+│   NO = Normally Open (L2+L3 connected when energized)       │
+│   L1 = Always connected (not controlled by OCPP server)     │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -807,9 +794,9 @@ The wallbox always reports power as if operating in 3-phase mode. The OCPP serve
 
 #### 4.10.3 Phase Control Requirements
 
-- **PHASE-001**: System SHALL control phases via GPIO outputs
-- **PHASE-002**: Phase 1 relay SHALL be normally closed (failsafe)
-- **PHASE-003**: Phases 2 and 3 relays SHALL be normally open
+- **PHASE-001**: System SHALL control phase switching via single GPIO output
+- **PHASE-002**: Phase 1 (L1) SHALL be always connected (no relay, not tracked by OCPP server)
+- **PHASE-003**: Phases 2 and 3 (L2+L3) SHALL be controlled by a single normally-open relay
 - **PHASE-004**: System SHALL NEVER switch relays while charging is active
 - **PHASE-005**: System SHALL stop transaction before phase switching
 - **PHASE-006**: System SHALL verify wallbox status is "Available" before switching
@@ -847,10 +834,10 @@ The phase switching process MUST follow this exact sequence:
 │     └─► Wait: phase_switch_delay (default 5 seconds)                    │
 │     └─► Purpose: ensure no residual current                             │
 │                                                                          │
-│  5. SWITCH RELAYS                                                       │
+│  5. SWITCH RELAY                                                        │
 │     └─► Set GPIO: according to target phase mode                        │
-│     └─► 1-phase: RELAY_2=OFF, RELAY_3=OFF                              │
-│     └─► 3-phase: RELAY_2=ON, RELAY_3=ON                                │
+│     └─► 1-phase: RELAY_PHASE23=OFF (L2+L3 disconnected)                │
+│     └─► 3-phase: RELAY_PHASE23=ON  (L2+L3 connected)                   │
 │                                                                          │
 │  6. VERIFY SWITCH                                                       │
 │     └─► Read: PHASE_SENSE feedback input                                │
@@ -1048,25 +1035,10 @@ Topic: `ocpp/{charger_id}/command/limit`
 
 ### 4.11 Status Indication
 
-#### 4.11.1 LED Patterns
-
-| LED | Pattern | Meaning |
-|-----|---------|---------|
-| Status | Solid | System running normally |
-| Status | Fast blink (5Hz) | Initializing / Booting |
-| Status | Slow blink (1Hz) | Error state |
-| Status | Double blink | OTA update in progress |
-| WiFi | Off | WiFi disconnected |
-| WiFi | Slow blink | Connecting to WiFi |
-| WiFi | Solid | WiFi connected |
-| WiFi | Fast blink | AP mode active (config) |
-| OCPP | Off | No charger connected |
-| OCPP | Solid | Charger connected |
-| OCPP | Blink | OCPP traffic |
-| MQTT | Off | MQTT disconnected |
-| MQTT | Slow blink | Connecting to broker |
-| MQTT | Solid | MQTT connected |
-| MQTT | Blink | MQTT traffic |
+No physical LEDs are used. Status is communicated via:
+- **Serial console**: ESP_LOG messages for all state changes
+- **MQTT**: Status topics for remote monitoring
+- **Captive portal**: `/api/system/status` endpoint with heap, uptime, connection state
 
 ### 4.12 Logging and Diagnostics
 
@@ -1224,7 +1196,7 @@ A Python-based test simulator provides automated testing:
 
 | Tool | Purpose |
 |------|---------|
-| ocpp-test-simulator | Python test harness (wallbox + MQTT) |
+| ocpp-test-wallbox | Python test harness (wallbox + MQTT) |
 | mosquitto_pub/sub | Manual MQTT testing |
 | Wireshark | Network packet analysis |
 | Browser DevTools | Captive portal testing |
@@ -1255,7 +1227,7 @@ A Python-based test simulator provides automated testing:
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Power on ESP32 | Boot complete < 10s, LEDs indicate ready |
+| 1 | Power on ESP32 | Boot complete < 10s, serial log shows ready |
 | 2 | Wallbox connects via WebSocket | Connection accepted, BootNotification exchanged |
 | 3 | Wallbox sends StatusNotification (Available) | Status published to MQTT |
 | 4 | EV plugs in (StatusNotification: Preparing) | Status change published |
@@ -1314,7 +1286,7 @@ A Python-based test simulator provides automated testing:
 | 4 | RemoteStopTransaction sent | Wallbox stops charging |
 | 5 | Wait for Available status | Status confirmed |
 | 6 | Safety delay (5s) | No relay activity |
-| 7 | Relays switched (L2, L3 OFF) | GPIO 26, 27 = LOW |
+| 7 | Relay switched (L2+L3 OFF) | GPIO 25 = LOW |
 | 8 | RemoteStartTransaction sent | Wallbox resumes |
 | 9 | Charging resumes in 1-phase | MeterValues / 3 reported |
 | 10 | Phase result published | Success, new mode: 1-phase |
@@ -1331,7 +1303,7 @@ A Python-based test simulator provides automated testing:
 | 4 | RemoteStopTransaction sent | Wallbox stops charging |
 | 5 | Wait for Available status | Status confirmed |
 | 6 | Safety delay (5s) | No relay activity |
-| 7 | Relays switched (L2, L3 ON) | GPIO 26, 27 = HIGH |
+| 7 | Relay switched (L2+L3 ON) | GPIO 25 = HIGH |
 | 8 | RemoteStartTransaction sent | Wallbox resumes |
 | 9 | Charging resumes in 3-phase | MeterValues 1:1 reported |
 | 10 | Phase result published | Success, new mode: 3-phase |
@@ -1342,7 +1314,7 @@ A Python-based test simulator provides automated testing:
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Hold CONFIG button 5 seconds | AP mode activates, LED fast blink |
+| 1 | Hold CONFIG button 5 seconds | AP mode activates (logged to serial) |
 | 2 | Connect to AP (OCPP-ESP32-XXXX) | DHCP assigns IP |
 | 3 | Open browser | Redirected to portal |
 | 4 | Navigate to WiFi page | Network list displayed |
@@ -1621,7 +1593,7 @@ coredump, data, coredump,0x3F0000, 0x10000,
 | Component | ESP-IDF Module | Purpose |
 |-----------|---------------|---------|
 | board_pins | soc | GPIO number definitions |
-| led_status | esp_driver_gpio, esp_timer | LED output + 50ms tick timer |
+| led_status | esp_common | Status stub (no physical LEDs) |
 | config_manager | nvs_flash, esp_wifi | NVS persistence, MAC address |
 | gpio_control | esp_driver_gpio, esp_timer | Relay output + button polling |
 | ethernet_manager | esp_eth, esp_driver_spi, esp_netif | W5500 SPI Ethernet |
@@ -1673,3 +1645,6 @@ Available → Preparing → Charging → SuspendedEV/SuspendedEVSE → Finishing
 | | | | Updated dependency table to ESP-IDF built-in components |
 | | | | Added serial console CLI (esp_console) to framework table |
 | | | | Specified custom OCPP implementation (not MicroOcpp) |
+| 1.3 | 2026-01-30 | - | Removed all LED hardware (no physical LEDs); status via log/MQTT only |
+| | | | Simplified phase switching: single relay for L2+L3, L1 always connected |
+| | | | Reduced pin count: removed 4 LED GPIOs and 2 relay GPIOs |

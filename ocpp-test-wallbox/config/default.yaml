@@ -1,4 +1,4 @@
-# OCPP Test Simulator Configuration
+# OCPP Test Wallbox Configuration
 #
 # In test mode, both the wallbox emulator (WebSocket) and MQTT client
 # connect to the ESP32 over WiFi. The ESP32 must have test_mode enabled
@@ -29,7 +29,7 @@ mqtt:
   port: 1883
   username: ""
   password: ""
-  client_id: "ocpp-test-simulator"
+  client_id: "ocpp-test-wallbox"
   topic_prefix: "ocpp"
   qos: 1
 

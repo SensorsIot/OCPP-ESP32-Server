@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "led_status.c"
+    SRCS "dns_server.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_common
+    REQUIRES lwip
 )

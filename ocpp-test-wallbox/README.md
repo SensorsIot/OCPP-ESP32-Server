@@ -1,4 +1,4 @@
-# OCPP Test Simulator
+# OCPP Test Wallbox
 
 Python-based test harness for the ESP32 OCPP Server. Provides:
 - **Wallbox Emulator**: OCPP 1.6J charge point that connects via WebSocket
@@ -9,7 +9,7 @@ Python-based test harness for the ESP32 OCPP Server. Provides:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     OCPP Test Simulator                              │
+│                     OCPP Test Wallbox                              │
 │                                                                      │
 │  ┌─────────────────────┐              ┌─────────────────────┐       │
 │  │  Wallbox Emulator   │              │    MQTT Client      │       │
@@ -32,7 +32,7 @@ Python-based test harness for the ESP32 OCPP Server. Provides:
 ## Directory Structure
 
 ```
-ocpp-test-simulator/
+ocpp-test-wallbox/
 ├── README.md
 ├── requirements.txt          # Python dependencies
 ├── pyproject.toml           # Project configuration
@@ -73,7 +73,7 @@ ocpp-test-simulator/
 ## Installation
 
 ```bash
-cd ocpp-test-simulator
+cd ocpp-test-wallbox
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

@@ -4,6 +4,7 @@
 #include "nvs.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "cJSON.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -34,10 +35,23 @@ static void load_defaults(void)
     s_cfg.mqtt_port     = 1883;
     strlcpy(s_cfg.mqtt_prefix, "ocpp",           sizeof(s_cfg.mqtt_prefix));
     s_cfg.mqtt_tls      = false;
+    /* mqtt_client_id default set after MAC read */
 
     s_cfg.ws_port        = 9000;
     s_cfg.hb_interval    = 60;
     s_cfg.meter_interval = 30;
+    strlcpy(s_cfg.auth_mode, "accept_all",       sizeof(s_cfg.auth_mode));
+
+    s_cfg.ap_timeout            = 300;
+
+    s_cfg.phase_switch_delay    = 5000;
+    s_cfg.phase_1_max_current   = 160;   /* 16.0 A */
+    s_cfg.phase_3_max_current   = 160;   /* 16.0 A */
+    s_cfg.phase_switch_threshold = 4100; /* 4.1 kW in watts */
+
+    s_cfg.ota_enabled           = true;
+    s_cfg.ota_check_interval    = 0;     /* 0 = disabled */
+    s_cfg.log_level             = 3;     /* ESP_LOG_INFO */
 }
 
 /* ---------- NVS helpers ---------- */
@@ -100,11 +114,13 @@ esp_err_t config_manager_init(void)
 
     load_defaults();
 
-    /* Build default AP SSID from MAC */
+    /* Build defaults from MAC */
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(s_cfg.ap_ssid, sizeof(s_cfg.ap_ssid),
              "OCPP-ESP32-%02X%02X", mac[4], mac[5]);
+    snprintf(s_cfg.mqtt_client_id, sizeof(s_cfg.mqtt_client_id),
+             "ocpp-esp32-%02X%02X", mac[4], mac[5]);
 
     err = nvs_open(NVS_NS, NVS_READWRITE, &s_nvs);
     if (err != ESP_OK) {
@@ -138,9 +154,30 @@ esp_err_t config_manager_init(void)
     nvs_read_str("mqtt_prefix",s_cfg.mqtt_prefix,sizeof(s_cfg.mqtt_prefix));
     nvs_read_bool("mqtt_tls",  &s_cfg.mqtt_tls);
 
+    nvs_read_str("mqtt_cid",   s_cfg.mqtt_client_id, sizeof(s_cfg.mqtt_client_id));
+
     nvs_read_u16("ws_port",    &s_cfg.ws_port);
     nvs_read_u16("hb_interval",&s_cfg.hb_interval);
     nvs_read_u16("meter_intv", &s_cfg.meter_interval);
+    nvs_read_str("auth_mode",  s_cfg.auth_mode,  sizeof(s_cfg.auth_mode));
+
+    nvs_read_u16("ap_timeout", &s_cfg.ap_timeout);
+
+    nvs_read_u16("ph_delay",   &s_cfg.phase_switch_delay);
+    nvs_read_u16("ph_1_max",   &s_cfg.phase_1_max_current);
+    nvs_read_u16("ph_3_max",   &s_cfg.phase_3_max_current);
+    nvs_read_u16("ph_thresh",  &s_cfg.phase_switch_threshold);
+
+    nvs_read_bool("ota_en",    &s_cfg.ota_enabled);
+    nvs_read_str("ota_url",    s_cfg.ota_url,    sizeof(s_cfg.ota_url));
+    nvs_read_u16("ota_intv",   &s_cfg.ota_check_interval);
+
+    {
+        uint8_t lv;
+        if (nvs_get_u8(s_nvs, "log_level", &lv) == ESP_OK) {
+            s_cfg.log_level = lv;
+        }
+    }
 
     ESP_LOGI(TAG, "Config loaded: dev=%s wifi_ssid=%s eth_ip=%s ws_port=%u",
              s_cfg.dev_name, s_cfg.wifi_ssid, s_cfg.eth_ip, s_cfg.ws_port);
@@ -177,6 +214,9 @@ static const str_map_t str_keys[] = {
     {"mqtt_user",   s_cfg.mqtt_user,   sizeof(s_cfg.mqtt_user)},
     {"mqtt_pass",   s_cfg.mqtt_pass,   sizeof(s_cfg.mqtt_pass)},
     {"mqtt_prefix", s_cfg.mqtt_prefix, sizeof(s_cfg.mqtt_prefix)},
+    {"mqtt_cid",    s_cfg.mqtt_client_id, sizeof(s_cfg.mqtt_client_id)},
+    {"auth_mode",   s_cfg.auth_mode,   sizeof(s_cfg.auth_mode)},
+    {"ota_url",     s_cfg.ota_url,     sizeof(s_cfg.ota_url)},
     {NULL, NULL, 0}
 };
 
@@ -202,11 +242,24 @@ static const u16_map_t u16_keys[] = {
     {"ws_port",      &s_cfg.ws_port},
     {"hb_interval",  &s_cfg.hb_interval},
     {"meter_intv",   &s_cfg.meter_interval},
+    {"ap_timeout",   &s_cfg.ap_timeout},
+    {"ph_delay",     &s_cfg.phase_switch_delay},
+    {"ph_1_max",     &s_cfg.phase_1_max_current},
+    {"ph_3_max",     &s_cfg.phase_3_max_current},
+    {"ph_thresh",    &s_cfg.phase_switch_threshold},
+    {"ota_intv",     &s_cfg.ota_check_interval},
     {NULL, NULL}
 };
 
 esp_err_t config_set_u16(const char *key, uint16_t value)
 {
+    /* log_level stored as u8 */
+    if (strcmp(key, "log_level") == 0) {
+        s_cfg.log_level = (uint8_t)value;
+        esp_err_t err = nvs_set_u8(s_nvs, key, (uint8_t)value);
+        if (err == ESP_OK) err = nvs_commit(s_nvs);
+        return err;
+    }
     for (const u16_map_t *m = u16_keys; m->key; m++) {
         if (strcmp(m->key, key) == 0) {
             *m->field = value;
@@ -226,6 +279,7 @@ static const bool_map_t bool_keys[] = {
     {"test_mode",  &s_cfg.test_mode},
     {"wifi_dhcp",  &s_cfg.wifi_dhcp},
     {"mqtt_tls",   &s_cfg.mqtt_tls},
+    {"ota_en",     &s_cfg.ota_enabled},
     {NULL, NULL}
 };
 
@@ -258,5 +312,105 @@ esp_err_t config_factory_reset(void)
              "OCPP-ESP32-%02X%02X", mac[4], mac[5]);
 
     ESP_LOGI(TAG, "Factory defaults restored");
+    return ESP_OK;
+}
+
+/* ---------- JSON serialization ---------- */
+
+cJSON *config_get_json(void)
+{
+    const config_t *cfg = &s_cfg;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+
+    /* Device */
+    cJSON_AddStringToObject(root, "dev_name",    cfg->dev_name);
+    cJSON_AddBoolToObject(root,   "test_mode",   cfg->test_mode);
+
+    /* Ethernet */
+    cJSON_AddStringToObject(root, "eth_ip",      cfg->eth_ip);
+    cJSON_AddStringToObject(root, "eth_subnet",  cfg->eth_subnet);
+    cJSON_AddStringToObject(root, "eth_gw",      cfg->eth_gw);
+
+    /* WiFi STA */
+    cJSON_AddStringToObject(root, "wifi_ssid",   cfg->wifi_ssid);
+    cJSON_AddStringToObject(root, "wifi_pass",   cfg->wifi_pass);
+    cJSON_AddBoolToObject(root,   "wifi_dhcp",   cfg->wifi_dhcp);
+    cJSON_AddStringToObject(root, "wifi_ip",     cfg->wifi_ip);
+    cJSON_AddStringToObject(root, "wifi_gw",     cfg->wifi_gw);
+    cJSON_AddStringToObject(root, "wifi_subnet", cfg->wifi_subnet);
+    cJSON_AddStringToObject(root, "wifi_dns",    cfg->wifi_dns);
+
+    /* WiFi AP */
+    cJSON_AddStringToObject(root, "ap_ssid",     cfg->ap_ssid);
+    cJSON_AddStringToObject(root, "ap_pass",     cfg->ap_pass);
+    cJSON_AddNumberToObject(root, "ap_timeout",  cfg->ap_timeout);
+
+    /* MQTT */
+    cJSON_AddStringToObject(root, "mqtt_host",   cfg->mqtt_host);
+    cJSON_AddNumberToObject(root, "mqtt_port",   cfg->mqtt_port);
+    cJSON_AddStringToObject(root, "mqtt_user",   cfg->mqtt_user);
+    cJSON_AddStringToObject(root, "mqtt_pass",   cfg->mqtt_pass);
+    cJSON_AddStringToObject(root, "mqtt_prefix", cfg->mqtt_prefix);
+    cJSON_AddBoolToObject(root,   "mqtt_tls",    cfg->mqtt_tls);
+    cJSON_AddStringToObject(root, "mqtt_cid",    cfg->mqtt_client_id);
+
+    /* OCPP / WebSocket */
+    cJSON_AddNumberToObject(root, "ws_port",     cfg->ws_port);
+    cJSON_AddNumberToObject(root, "hb_interval", cfg->hb_interval);
+    cJSON_AddNumberToObject(root, "meter_intv",  cfg->meter_interval);
+    cJSON_AddStringToObject(root, "auth_mode",   cfg->auth_mode);
+
+    /* Phase switching */
+    cJSON_AddNumberToObject(root, "ph_delay",    cfg->phase_switch_delay);
+    cJSON_AddNumberToObject(root, "ph_1_max",    cfg->phase_1_max_current);
+    cJSON_AddNumberToObject(root, "ph_3_max",    cfg->phase_3_max_current);
+    cJSON_AddNumberToObject(root, "ph_thresh",   cfg->phase_switch_threshold);
+
+    /* OTA */
+    cJSON_AddBoolToObject(root,   "ota_en",      cfg->ota_enabled);
+    cJSON_AddStringToObject(root, "ota_url",     cfg->ota_url);
+    cJSON_AddNumberToObject(root, "ota_intv",    cfg->ota_check_interval);
+
+    /* System */
+    cJSON_AddNumberToObject(root, "log_level",   cfg->log_level);
+
+    return root;
+}
+
+esp_err_t config_set_from_json(cJSON *root)
+{
+    if (!root) return ESP_ERR_INVALID_ARG;
+
+    /* String keys */
+    for (const str_map_t *m = str_keys; m->key; m++) {
+        cJSON *item = cJSON_GetObjectItem(root, m->key);
+        if (item && cJSON_IsString(item)) {
+            config_set_str(m->key, item->valuestring);
+        }
+    }
+
+    /* u16 keys */
+    for (const u16_map_t *m = u16_keys; m->key; m++) {
+        cJSON *item = cJSON_GetObjectItem(root, m->key);
+        if (item && cJSON_IsNumber(item)) {
+            config_set_u16(m->key, (uint16_t)item->valuedouble);
+        }
+    }
+
+    /* log_level (stored as u8, handled by config_set_u16) */
+    cJSON *ll = cJSON_GetObjectItem(root, "log_level");
+    if (ll && cJSON_IsNumber(ll)) {
+        config_set_u16("log_level", (uint16_t)ll->valuedouble);
+    }
+
+    /* Bool keys */
+    for (const bool_map_t *m = bool_keys; m->key; m++) {
+        cJSON *item = cJSON_GetObjectItem(root, m->key);
+        if (item && cJSON_IsBool(item)) {
+            config_set_bool(m->key, cJSON_IsTrue(item));
+        }
+    }
+
     return ESP_OK;
 }

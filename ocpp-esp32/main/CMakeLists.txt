@@ -8,6 +8,10 @@ idf_component_register(
         gpio_control
         ethernet_manager
         wifi_manager
+        captive_portal
+        ocpp_server
+        mqtt_manager
+        phase_control
         console_cmd
         esp_event
         esp_netif

@@ -38,10 +38,31 @@ typedef struct {
     char     mqtt_prefix[CFG_STR_MAX];/* NVS: mqtt_prefix */
     bool     mqtt_tls;                /* NVS: mqtt_tls */
 
+    /* MQTT (continued) */
+    char     mqtt_client_id[CFG_STR_MAX]; /* NVS: mqtt_cid */
+
     /* OCPP / WebSocket */
     uint16_t ws_port;                 /* NVS: ws_port */
     uint16_t hb_interval;             /* NVS: hb_interval */
     uint16_t meter_interval;          /* NVS: meter_intv */
+    char     auth_mode[CFG_STR_MAX];  /* NVS: auth_mode ("accept_all") */
+
+    /* WiFi AP (continued) */
+    uint16_t ap_timeout;              /* NVS: ap_timeout (seconds) */
+
+    /* Phase switching */
+    uint16_t phase_switch_delay;      /* NVS: ph_delay (ms, default 5000) */
+    uint16_t phase_1_max_current;     /* NVS: ph_1_max (A * 10, default 160 = 16.0A) */
+    uint16_t phase_3_max_current;     /* NVS: ph_3_max (A * 10, default 160 = 16.0A) */
+    uint16_t phase_switch_threshold;  /* NVS: ph_thresh (W, default 4100 = 4.1kW) */
+
+    /* OTA */
+    bool     ota_enabled;             /* NVS: ota_en */
+    char     ota_url[128];            /* NVS: ota_url */
+    uint16_t ota_check_interval;      /* NVS: ota_intv (minutes) */
+
+    /* System */
+    uint8_t  log_level;               /* NVS: log_level (0-5, default 3=INFO) */
 } config_t;
 
 /**
@@ -76,3 +97,17 @@ esp_err_t config_set_bool(const char *key, bool value);
  * Erase all NVS config and reload defaults.
  */
 esp_err_t config_factory_reset(void);
+
+/**
+ * Return all configuration as a cJSON object.
+ * Caller must call cJSON_Delete() on the returned pointer.
+ * Returns NULL on allocation failure.
+ */
+struct cJSON *config_get_json(void);
+
+/**
+ * Set configuration values from a cJSON object.
+ * Only keys present in the JSON are updated; others are left unchanged.
+ * String, number, and boolean fields are handled automatically.
+ */
+esp_err_t config_set_from_json(struct cJSON *root);

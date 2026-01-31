@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCPP ESP32 Configuration</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f0f2f5;color:#333;font-size:14px}
+.header{background:#1a73e8;color:#fff;padding:16px;text-align:center}
+.header h1{font-size:18px;font-weight:600}
+.header p{font-size:12px;opacity:0.8;margin-top:4px}
+.tabs{display:flex;background:#fff;border-bottom:2px solid #e0e0e0;overflow-x:auto}
+.tab{flex:1;padding:12px 8px;text-align:center;cursor:pointer;border:none;background:none;font-size:13px;font-weight:500;color:#666;white-space:nowrap;min-width:80px}
+.tab.active{color:#1a73e8;border-bottom:2px solid #1a73e8;margin-bottom:-2px}
+.panel{display:none;padding:16px;max-width:600px;margin:0 auto}
+.panel.active{display:block}
+.card{background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.card h3{font-size:15px;margin-bottom:12px;color:#1a73e8}
+.form-group{margin-bottom:12px}
+.form-group label{display:block;font-size:12px;font-weight:500;color:#555;margin-bottom:4px}
+.form-group input,.form-group select{width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;outline:none;transition:border-color 0.2s}
+.form-group input:focus{border-color:#1a73e8}
+.form-group input[type="checkbox"]{width:auto;margin-right:8px}
+.checkbox-label{display:flex;align-items:center;font-size:13px;cursor:pointer}
+.btn{padding:10px 20px;border:none;border-radius:4px;font-size:14px;font-weight:500;cursor:pointer;transition:background 0.2s;width:100%;margin-top:8px}
+.btn-primary{background:#1a73e8;color:#fff}
+.btn-primary:hover{background:#1557b0}
+.btn-primary:disabled{background:#93b4e8;cursor:not-allowed}
+.btn-danger{background:#d93025;color:#fff}
+.btn-danger:hover{background:#b3261e}
+.btn-secondary{background:#e8eaed;color:#333}
+.btn-secondary:hover{background:#d2d5d9}
+.btn-sm{padding:8px 14px;font-size:12px;width:auto}
+.wifi-list{list-style:none}
+.wifi-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #e0e0e0;border-radius:4px;margin-bottom:6px;cursor:pointer;transition:background 0.1s}
+.wifi-item:hover{background:#f5f5f5}
+.wifi-item .ssid{font-weight:500}
+.wifi-item .meta{font-size:11px;color:#888}
+.signal{font-size:16px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:4px;color:#fff;font-size:13px;z-index:1000;opacity:0;transition:opacity 0.3s}
+.toast.show{opacity:1}
+.toast.success{background:#0d904f}
+.toast.error{background:#d93025}
+.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.status-item{background:#f8f9fa;padding:10px;border-radius:4px}
+.status-item .label{font-size:11px;color:#888;text-transform:uppercase}
+.status-item .value{font-size:15px;font-weight:500;margin-top:2px}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid #ccc;border-top-color:#1a73e8;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.confirm-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:500;align-items:center;justify-content:center}
+.confirm-overlay.show{display:flex}
+.confirm-box{background:#fff;border-radius:8px;padding:24px;max-width:340px;width:90%;text-align:center}
+.confirm-box h3{margin-bottom:12px;color:#d93025}
+.confirm-box p{margin-bottom:20px;font-size:13px;color:#666}
+.confirm-box .btns{display:flex;gap:8px}
+.confirm-box .btns .btn{flex:1}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>OCPP ESP32 Configuration</h1>
+    <p id="deviceName">Loading...</p>
+</div>
+
+<div class="tabs">
+    <button class="tab active" data-tab="network">Network</button>
+    <button class="tab" data-tab="ocpp">OCPP / MQTT</button>
+    <button class="tab" data-tab="firmware">Firmware</button>
+    <button class="tab" data-tab="system">System</button>
+</div>
+
+<!-- Network Tab -->
+<div class="panel active" id="panel-network">
+    <div class="card">
+        <h3>WiFi Networks</h3>
+        <button class="btn btn-secondary btn-sm" id="btnScan" onclick="scanWifi()">Scan Networks</button>
+        <ul class="wifi-list" id="wifiList" style="margin-top:12px"></ul>
+    </div>
+    <div class="card">
+        <h3>WiFi Station Settings</h3>
+        <div class="form-group">
+            <label>SSID</label>
+            <input type="text" id="wifi_ssid" maxlength="63">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="wifi_pass" maxlength="63">
+        </div>
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="wifi_dhcp" onchange="toggleDhcp()"> Use DHCP
+            </label>
+        </div>
+        <div id="staticIpFields">
+            <div class="form-group">
+                <label>IP Address</label>
+                <input type="text" id="wifi_ip" placeholder="192.168.1.100">
+            </div>
+            <div class="form-group">
+                <label>Gateway</label>
+                <input type="text" id="wifi_gw" placeholder="192.168.1.1">
+            </div>
+            <div class="form-group">
+                <label>Subnet Mask</label>
+                <input type="text" id="wifi_subnet" placeholder="255.255.255.0">
+            </div>
+            <div class="form-group">
+                <label>DNS Server</label>
+                <input type="text" id="wifi_dns" placeholder="8.8.8.8">
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="saveConfig()">Save WiFi Settings</button>
+    </div>
+    <div class="card">
+        <h3>Ethernet Settings</h3>
+        <div class="form-group">
+            <label>IP Address</label>
+            <input type="text" id="eth_ip">
+        </div>
+        <div class="form-group">
+            <label>Subnet Mask</label>
+            <input type="text" id="eth_subnet">
+        </div>
+        <div class="form-group">
+            <label>Gateway</label>
+            <input type="text" id="eth_gw">
+        </div>
+        <button class="btn btn-primary" onclick="saveConfig()">Save Ethernet Settings</button>
+    </div>
+    <div class="card">
+        <h3>Access Point Settings</h3>
+        <div class="form-group">
+            <label>AP SSID</label>
+            <input type="text" id="ap_ssid" maxlength="63">
+        </div>
+        <div class="form-group">
+            <label>AP Password</label>
+            <input type="text" id="ap_pass" maxlength="63">
+        </div>
+        <div class="form-group">
+            <label>AP Timeout (seconds, 0 = no timeout)</label>
+            <input type="number" id="ap_timeout" min="0" max="65535">
+        </div>
+        <button class="btn btn-primary" onclick="saveConfig()">Save AP Settings</button>
+    </div>
+</div>
+
+<!-- OCPP / MQTT Tab -->
+<div class="panel" id="panel-ocpp">
+    <div class="card">
+        <h3>Device</h3>
+        <div class="form-group">
+            <label>Device Name</label>
+            <input type="text" id="dev_name" maxlength="63">
+        </div>
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="test_mode"> Test Mode
+            </label>
+        </div>
+    </div>
+    <div class="card">
+        <h3>OCPP WebSocket</h3>
+        <div class="form-group">
+            <label>WebSocket Port</label>
+            <input type="number" id="ws_port" min="1" max="65535">
+        </div>
+        <div class="form-group">
+            <label>Heartbeat Interval (s)</label>
+            <input type="number" id="hb_interval" min="5" max="3600">
+        </div>
+        <div class="form-group">
+            <label>Meter Interval (s)</label>
+            <input type="number" id="meter_intv" min="5" max="3600">
+        </div>
+        <div class="form-group">
+            <label>Auth Mode</label>
+            <input type="text" id="auth_mode" maxlength="63" placeholder="accept_all">
+        </div>
+    </div>
+    <div class="card">
+        <h3>MQTT Broker</h3>
+        <div class="form-group">
+            <label>Host</label>
+            <input type="text" id="mqtt_host" placeholder="mqtt.example.com">
+        </div>
+        <div class="form-group">
+            <label>Port</label>
+            <input type="number" id="mqtt_port" min="1" max="65535">
+        </div>
+        <div class="form-group">
+            <label>Username</label>
+            <input type="text" id="mqtt_user">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="mqtt_pass">
+        </div>
+        <div class="form-group">
+            <label>Topic Prefix</label>
+            <input type="text" id="mqtt_prefix">
+        </div>
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="mqtt_tls"> Use TLS
+            </label>
+        </div>
+        <div class="form-group">
+            <label>Client ID</label>
+            <input type="text" id="mqtt_cid" maxlength="63">
+        </div>
+    </div>
+    <div class="card">
+        <h3>Phase Switching</h3>
+        <div class="form-group">
+            <label>Switch Delay (ms)</label>
+            <input type="number" id="ph_delay" min="0" max="65535">
+        </div>
+        <div class="form-group">
+            <label>1-Phase Max Current (A &times;10, e.g. 160 = 16.0A)</label>
+            <input type="number" id="ph_1_max" min="0" max="65535">
+        </div>
+        <div class="form-group">
+            <label>3-Phase Max Current (A &times;10, e.g. 160 = 16.0A)</label>
+            <input type="number" id="ph_3_max" min="0" max="65535">
+        </div>
+        <div class="form-group">
+            <label>Switch Threshold (W)</label>
+            <input type="number" id="ph_thresh" min="0" max="65535">
+        </div>
+    </div>
+    <div class="card">
+        <h3>OTA Updates</h3>
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="ota_en"> Enable OTA
+            </label>
+        </div>
+        <div class="form-group">
+            <label>OTA URL</label>
+            <input type="text" id="ota_url" maxlength="127" placeholder="https://...">
+        </div>
+        <div class="form-group">
+            <label>Check Interval (minutes, 0 = disabled)</label>
+            <input type="number" id="ota_intv" min="0" max="65535">
+        </div>
+    </div>
+    <div class="card">
+        <h3>System</h3>
+        <div class="form-group">
+            <label>Log Level (0=None, 1=Error, 2=Warn, 3=Info, 4=Debug, 5=Verbose)</label>
+            <input type="number" id="log_level" min="0" max="5">
+        </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveConfig()">Save Settings</button>
+</div>
+
+<!-- Firmware Tab -->
+<div class="panel" id="panel-firmware">
+    <div class="card">
+        <h3>Firmware Information</h3>
+        <div class="status-grid" id="fwGrid">
+            <div class="status-item"><div class="label">Version</div><div class="value" id="fw-ver">--</div></div>
+            <div class="status-item"><div class="label">Build Date</div><div class="value" id="fw-date">--</div></div>
+            <div class="status-item"><div class="label">IDF Version</div><div class="value" id="fw-idf">--</div></div>
+            <div class="status-item"><div class="label">Partition</div><div class="value" id="fw-part">--</div></div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top:12px" onclick="loadFwInfo()">Refresh</button>
+    </div>
+    <div class="card">
+        <h3>Firmware Update</h3>
+        <div class="form-group">
+            <label>Select firmware file (.bin)</label>
+            <input type="file" id="fwFile" accept=".bin" style="padding:6px 0">
+        </div>
+        <div id="fwProgress" style="display:none;margin:12px 0">
+            <div style="background:#e0e0e0;border-radius:4px;overflow:hidden;height:20px">
+                <div id="fwBar" style="background:#1a73e8;height:100%;width:0%;transition:width 0.3s"></div>
+            </div>
+            <p id="fwProgressText" style="font-size:12px;color:#888;margin-top:4px">Uploading...</p>
+        </div>
+        <button class="btn btn-primary" id="btnUpload" onclick="uploadFirmware()">Upload Firmware</button>
+        <p style="font-size:11px;color:#888;margin-top:8px">Do not power off during update.</p>
+    </div>
+</div>
+
+<!-- System Tab -->
+<div class="panel" id="panel-system">
+    <div class="card">
+        <h3>System Status</h3>
+        <div class="status-grid" id="statusGrid">
+            <div class="status-item"><div class="label">Free Heap</div><div class="value" id="st-heap">--</div></div>
+            <div class="status-item"><div class="label">Min Heap</div><div class="value" id="st-heap-min">--</div></div>
+            <div class="status-item"><div class="label">Uptime</div><div class="value" id="st-uptime">--</div></div>
+            <div class="status-item"><div class="label">IDF Version</div><div class="value" id="st-idf">--</div></div>
+            <div class="status-item"><div class="label">CPU Cores</div><div class="value" id="st-cores">--</div></div>
+            <div class="status-item"><div class="label">Chip Rev</div><div class="value" id="st-rev">--</div></div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top:12px" onclick="loadStatus()">Refresh</button>
+    </div>
+    <div class="card">
+        <h3>Actions</h3>
+        <button class="btn btn-primary" onclick="doReboot()">Reboot Device</button>
+        <button class="btn btn-danger" style="margin-top:8px" onclick="showFactoryReset()">Factory Reset</button>
+    </div>
+</div>
+
+<!-- Factory Reset Confirmation -->
+<div class="confirm-overlay" id="confirmOverlay">
+    <div class="confirm-box">
+        <h3>Factory Reset</h3>
+        <p>This will erase all settings and reboot the device. Are you sure?</p>
+        <div class="btns">
+            <button class="btn btn-secondary" onclick="hideFactoryReset()">Cancel</button>
+            <button class="btn btn-danger" onclick="doFactoryReset()">Reset</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* Tab switching */
+document.querySelectorAll('.tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+        document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+        document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+        tab.classList.add('active');
+        document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    });
+});
+
+/* Toast notifications */
+function toast(msg, type) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast show ' + (type || 'success');
+    setTimeout(function() { el.className = 'toast'; }, 3000);
+}
+
+/* DHCP toggle */
+function toggleDhcp() {
+    var show = !document.getElementById('wifi_dhcp').checked;
+    document.getElementById('staticIpFields').style.display = show ? 'block' : 'none';
+}
+
+/* Config fields — IDs match JSON keys */
+var configFields = [
+    'dev_name', 'test_mode',
+    'eth_ip', 'eth_subnet', 'eth_gw',
+    'wifi_ssid', 'wifi_pass', 'wifi_dhcp', 'wifi_ip', 'wifi_gw', 'wifi_subnet', 'wifi_dns',
+    'ap_ssid', 'ap_pass', 'ap_timeout',
+    'mqtt_host', 'mqtt_port', 'mqtt_user', 'mqtt_pass', 'mqtt_prefix', 'mqtt_tls', 'mqtt_cid',
+    'ws_port', 'hb_interval', 'meter_intv', 'auth_mode',
+    'ph_delay', 'ph_1_max', 'ph_3_max', 'ph_thresh',
+    'ota_en', 'ota_url', 'ota_intv',
+    'log_level'
+];
+
+function loadConfig() {
+    fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
+        configFields.forEach(function(key) {
+            var el = document.getElementById(key);
+            if (!el) return;
+            if (el.type === 'checkbox') {
+                el.checked = !!cfg[key];
+            } else {
+                el.value = cfg[key] !== undefined ? cfg[key] : '';
+            }
+        });
+        document.getElementById('deviceName').textContent = cfg.dev_name || 'OCPP ESP32';
+        toggleDhcp();
+    }).catch(function(e) {
+        toast('Failed to load config', 'error');
+    });
+}
+
+function saveConfig() {
+    var data = {};
+    configFields.forEach(function(key) {
+        var el = document.getElementById(key);
+        if (!el) return;
+        if (el.type === 'checkbox') {
+            data[key] = el.checked;
+        } else if (el.type === 'number') {
+            data[key] = parseInt(el.value, 10) || 0;
+        } else {
+            data[key] = el.value;
+        }
+    });
+
+    fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    }).then(function(r) { return r.json(); }).then(function(resp) {
+        if (resp.ok) {
+            toast('Settings saved');
+            document.getElementById('deviceName').textContent = data.dev_name || 'OCPP ESP32';
+        } else {
+            toast('Save failed', 'error');
+        }
+    }).catch(function(e) {
+        toast('Save failed: ' + e.message, 'error');
+    });
+}
+
+/* WiFi scan */
+function scanWifi() {
+    var btn = document.getElementById('btnScan');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Scanning...';
+    var list = document.getElementById('wifiList');
+    list.innerHTML = '';
+
+    fetch('/api/wifi/scan').then(function(r) { return r.json(); }).then(function(networks) {
+        btn.disabled = false;
+        btn.textContent = 'Scan Networks';
+
+        if (networks.length === 0) {
+            list.innerHTML = '<li style="padding:12px;color:#888;text-align:center">No networks found</li>';
+            return;
+        }
+
+        networks.forEach(function(ap) {
+            var li = document.createElement('li');
+            li.className = 'wifi-item';
+            var rssi = ap.rssi;
+            var bars = rssi > -50 ? '▂▄▆█' : rssi > -60 ? '▂▄▆' : rssi > -70 ? '▂▄' : '▂';
+            li.innerHTML = '<div><div class="ssid">' + escHtml(ap.ssid) + '</div>' +
+                '<div class="meta">' + ap.auth + ' &middot; Ch ' + ap.channel + ' &middot; ' + rssi + ' dBm</div></div>' +
+                '<div class="signal">' + bars + '</div>';
+            li.addEventListener('click', function() {
+                document.getElementById('wifi_ssid').value = ap.ssid;
+                document.getElementById('wifi_pass').value = '';
+                document.getElementById('wifi_pass').focus();
+                toast('Selected: ' + ap.ssid);
+            });
+            list.appendChild(li);
+        });
+    }).catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = 'Scan Networks';
+        toast('Scan failed', 'error');
+    });
+}
+
+function escHtml(s) {
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(s));
+    return d.innerHTML;
+}
+
+/* System status */
+function loadStatus() {
+    fetch('/api/system/status').then(function(r) { return r.json(); }).then(function(s) {
+        document.getElementById('st-heap').textContent = (s.heap_free / 1024).toFixed(1) + ' KB';
+        document.getElementById('st-heap-min').textContent = (s.heap_min / 1024).toFixed(1) + ' KB';
+        var secs = Math.floor(s.uptime_ms / 1000);
+        var h = Math.floor(secs / 3600);
+        var m = Math.floor((secs % 3600) / 60);
+        var sec = secs % 60;
+        document.getElementById('st-uptime').textContent = h + 'h ' + m + 'm ' + sec + 's';
+        document.getElementById('st-idf').textContent = s.idf_version;
+        document.getElementById('st-cores').textContent = s.chip_cores;
+        document.getElementById('st-rev').textContent = s.chip_revision;
+    }).catch(function(e) {
+        toast('Status load failed', 'error');
+    });
+}
+
+/* Reboot */
+function doReboot() {
+    fetch('/api/system/reboot', { method: 'POST' }).then(function() {
+        toast('Rebooting...');
+    }).catch(function() {
+        toast('Reboot command sent');
+    });
+}
+
+/* Factory reset */
+function showFactoryReset() {
+    document.getElementById('confirmOverlay').classList.add('show');
+}
+function hideFactoryReset() {
+    document.getElementById('confirmOverlay').classList.remove('show');
+}
+function doFactoryReset() {
+    hideFactoryReset();
+    fetch('/api/system/factory-reset', { method: 'POST' }).then(function() {
+        toast('Factory reset done, rebooting...');
+    }).catch(function() {
+        toast('Reset command sent');
+    });
+}
+
+/* Firmware info */
+function loadFwInfo() {
+    fetch('/api/ota/status').then(function(r) { return r.json(); }).then(function(fw) {
+        document.getElementById('fw-ver').textContent = fw.version || '--';
+        document.getElementById('fw-date').textContent = (fw.date || '') + ' ' + (fw.time || '');
+        document.getElementById('fw-idf').textContent = fw.idf_ver || '--';
+        document.getElementById('fw-part').textContent = fw.running_partition || '--';
+    }).catch(function() {
+        toast('Failed to load firmware info', 'error');
+    });
+}
+
+/* Firmware upload */
+function uploadFirmware() {
+    var fileInput = document.getElementById('fwFile');
+    if (!fileInput.files.length) {
+        toast('Select a firmware file first', 'error');
+        return;
+    }
+    var file = fileInput.files[0];
+    var btn = document.getElementById('btnUpload');
+    btn.disabled = true;
+    document.getElementById('fwProgress').style.display = 'block';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/ota/upload', true);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+    xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+            var pct = Math.round((e.loaded / e.total) * 100);
+            document.getElementById('fwBar').style.width = pct + '%';
+            document.getElementById('fwProgressText').textContent = 'Uploading... ' + pct + '%';
+        }
+    };
+
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            document.getElementById('fwProgressText').textContent = 'Update complete! Rebooting...';
+            toast('Firmware updated, rebooting...');
+        } else {
+            document.getElementById('fwProgressText').textContent = 'Update failed: ' + xhr.responseText;
+            toast('Upload failed', 'error');
+            btn.disabled = false;
+        }
+    };
+
+    xhr.onerror = function() {
+        document.getElementById('fwProgressText').textContent = 'Upload failed (network error)';
+        toast('Upload failed', 'error');
+        btn.disabled = false;
+    };
+
+    xhr.send(file);
+}
+
+/* Init */
+loadConfig();
+</script>
+</body>
+</html>

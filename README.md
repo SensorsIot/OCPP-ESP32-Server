@@ -54,7 +54,7 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 ```
 ├── 📄 docs/
 │   └── ocpp-esp32-fsd.md          # Functional Specification Document
-├── 🧪 ocpp-test-simulator/        # Python test harness
+├── 🧪 ocpp-test-wallbox/          # Python test harness
 │   ├── src/
 │   │   ├── wallbox_emulator/      # OCPP charge point simulator
 │   │   ├── mqtt_client/           # MQTT command/status client
@@ -64,11 +64,16 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
     ├── main/main.c                # Boot logic, watchdog
     └── components/                # ESP-IDF components
         ├── board_pins/            # GPIO pin definitions
-        ├── led_status/            # LED blink patterns
-        ├── config_manager/        # NVS config persistence
-        ├── gpio_control/          # Relays + config button
+        ├── config_manager/        # NVS config persistence + JSON API
+        ├── gpio_control/          # Phase relay + config button
         ├── ethernet_manager/      # W5500 SPI Ethernet
         ├── wifi_manager/          # WiFi STA/AP modes
+        ├── captive_portal/        # Web UI + REST API
+        ├── dns_server/            # Captive portal DNS redirect
+        ├── ocpp_server/           # OCPP 1.6J WebSocket server
+        ├── mqtt_manager/          # MQTT client bridge
+        ├── phase_control/         # Phase switching state machine
+        ├── ota_manager/           # OTA firmware updates
         └── console_cmd/           # Serial CLI REPL
 ```
 
@@ -81,7 +86,7 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 | 🧠 MCU | ESP32-WROOM-32 or ESP32-S3 |
 | 🔌 Ethernet | W5500 SPI module |
 | 💾 Flash | 8MB recommended (OTA dual partition) |
-| ⚡ Phase Relays | GPIO 25 (L1/NC), 26 (L2/NO), 27 (L3/NO) |
+| ⚡ Phase Relay | GPIO 25 (single relay for L2+L3, L1 always connected) |
 | 📍 Feedback | GPIO 34 (phase sense input) |
 
 ---
@@ -91,7 +96,7 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 | Document | Description |
 |----------|-------------|
 | [Functional Spec](docs/ocpp-esp32-fsd.md) | Full FSD with requirements, architecture, test cases |
-| [Test Simulator](ocpp-test-simulator/README.md) | Python test harness documentation |
+| [Test Simulator](ocpp-test-wallbox/README.md) | Python test harness documentation |
 
 ---
 
@@ -101,8 +106,8 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 |-------|-------------|--------|
 | 📄 FSD | Functional Specification | ✅ Complete |
 | 🧪 Test Scaffold | Simulator directory structure | ✅ Complete |
-| 🔧 Phase 1 | Core infrastructure (ETH, WiFi, NVS, LEDs, Console) | ✅ Complete |
-| 🌐 Phase 2 | Captive portal & configuration | ⬜ Planned |
+| 🔧 Phase 1 | Core infrastructure (ETH, WiFi, NVS, GPIO, Console) | ✅ Complete |
+| 🌐 Phase 2 | Captive portal & configuration | ✅ Complete |
 | 🔄 Phase 3 | OTA updates | ⬜ Planned |
 | ⚡ Phase 4 | OCPP core (WebSocket, messages) | ⬜ Planned |
 | 🔋 Phase 5 | Transactions & metering | ⬜ Planned |
@@ -147,7 +152,7 @@ After flashing, connect at 115200 baud. Available commands:
 ### Test Simulator Setup
 
 ```bash
-cd ocpp-test-simulator
+cd ocpp-test-wallbox
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

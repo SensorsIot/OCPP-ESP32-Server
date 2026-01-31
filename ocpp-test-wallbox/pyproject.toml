@@ -1,5 +1,5 @@
 [project]
-name = "ocpp-test-simulator"
+name = "ocpp-test-wallbox"
 version = "0.1.0"
 description = "Test simulator for ESP32 OCPP Server"
 requires-python = ">=3.11"

@@ -148,20 +148,19 @@ esp_err_t wifi_manager_init(wifi_op_mode_t mode)
         break;
     }
     case WIFI_OP_AP_ONLY: {
-        ESP_LOGI(TAG, "Mode: AP only (ssid=%s)", cfg->ap_ssid);
+        ESP_LOGI(TAG, "Mode: AP only (ssid=%s, open)", cfg->ap_ssid);
         s_ap_netif = esp_netif_create_default_wifi_ap();
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 
         wifi_config_t ap_cfg = {
             .ap = {
                 .max_connection = 4,
-                .authmode = WIFI_AUTH_WPA2_PSK,
+                .authmode = WIFI_AUTH_OPEN,
                 .channel = 1,
             },
         };
         strlcpy((char *)ap_cfg.ap.ssid, cfg->ap_ssid, sizeof(ap_cfg.ap.ssid));
         ap_cfg.ap.ssid_len = strlen(cfg->ap_ssid);
-        strlcpy((char *)ap_cfg.ap.password, cfg->ap_pass, sizeof(ap_cfg.ap.password));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
 
         set_ap_ip(s_ap_netif);

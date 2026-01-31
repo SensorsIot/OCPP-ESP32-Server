@@ -263,16 +263,16 @@ If the wallbox only supports `"Current"`, step 3 returns `status:"Rejected"`.
 | 19 | CP->CSMS | StatusNotification | `connectorId:1`, `status:"Available"` |
 
 **Expected meter values (3-phase, 16A)**:
-| Measurand | Value | Calculation |
-|-----------|-------|-------------|
-| Power.Active.Import | ~11,040 W | 3 x 230V x 16A |
-| Current.Import (L1) | ~16 A | |
-| Current.Import (L2) | ~16 A | |
-| Current.Import (L3) | ~16 A | |
-| Voltage (L1) | ~230 V | |
+| Measurand | Expected | Tolerance |
+|-----------|----------|-----------|
+| Power.Active.Import | ~11,040 W | ±5% |
+| Current.Import (L1) | ~16 A | ±5% |
+| Current.Import (L2) | ~16 A | ±5% |
+| Current.Import (L3) | ~16 A | ±5% |
+| Voltage (L1/L2/L3) | ~230 V | ±5% |
 | Energy.Active.Import.Register | increasing | ~11 kWh/hour |
 
-**Pass**: Full cycle completes, meter values within 5% of expected, all status
+**Pass**: Full cycle completes, meter values within tolerance, all status
 transitions correct.
 
 #### TC-101: Charge at 3.7 kW (1-phase, 16A, 3.68 kW)
@@ -289,13 +289,14 @@ Same flow as TC-100, but with:
 | 13 | MeterValues differ (see below) |
 
 **Expected meter values (1-phase, 16A)**:
-| Measurand | Value | Notes |
-|-----------|-------|-------|
-| Power.Active.Import | ~11,040 W | Wallbox reports 3-phase equivalent |
-| Current.Import (L1) | ~16 A | Only L1 active |
-| Current.Import (L2) | 0 A | No current |
-| Current.Import (L3) | 0 A | No current |
-| Voltage (L1) | ~230 V | |
+| Measurand | Raw (wallbox) | Corrected (CSMS) | Tolerance |
+|-----------|---------------|------------------|-----------|
+| Power.Active.Import | ~11,040 W | ~3,680 W | ±5% |
+| Current.Import (L1) | ~16 A | ~16 A | ±5% |
+| Current.Import (L2) | 0 A | 0 A | |
+| Current.Import (L3) | 0 A | 0 A | |
+| Voltage (L1) | ~230 V | ~230 V | ±5% |
+| Energy.Active.Import.Register | increasing | ~3.68 kWh/hour (corrected) | |
 
 **CSMS correction** (applied by ESP32, not the wallbox):
 | Measurand | Raw from wallbox | Corrected by CSMS | Factor |
@@ -379,10 +380,14 @@ to StartTransaction.
 | 13 | CP->CSMS | MeterValues | `Power.Active.Import: ~6900W`, `Current.Import: ~10A` |
 
 **Expected meter values (3-phase, 10A)**:
-| Measurand | Value | Calculation |
-|-----------|-------|-------------|
-| Power.Active.Import | ~6,900 W | 3 x 230V x 10A |
-| Current.Import (each) | ~10 A | |
+| Measurand | Expected | Tolerance |
+|-----------|----------|-----------|
+| Power.Active.Import | ~6,900 W | ±5% |
+| Current.Import (L1) | ~10 A | ±5% |
+| Current.Import (L2) | ~10 A | ±5% |
+| Current.Import (L3) | ~10 A | ±5% |
+| Voltage (L1/L2/L3) | ~230 V | ±5% |
+| Energy.Active.Import.Register | increasing | ~6.9 kWh/hour |
 
 **Pass**: Power at ~6.9 kW within 10 seconds of profile change.
 
@@ -400,10 +405,14 @@ the boundary where the CSMS decides between 1-phase and 3-phase mode.
 | 13 | CP->CSMS | MeterValues | `Power.Active.Import: ~4140W`, `Current.Import: ~6A` |
 
 **Expected meter values (3-phase, 6A)**:
-| Measurand | Value | Calculation |
-|-----------|-------|-------------|
-| Power.Active.Import | ~4,140 W | 3 x 230V x 6A |
-| Current.Import (each) | ~6 A | Minimum per IEC 61851 |
+| Measurand | Expected | Tolerance |
+|-----------|----------|-----------|
+| Power.Active.Import | ~4,140 W | ±5% |
+| Current.Import (L1) | ~6 A | ±5% |
+| Current.Import (L2) | ~6 A | ±5% |
+| Current.Import (L3) | ~6 A | ±5% |
+| Voltage (L1/L2/L3) | ~230 V | ±5% |
+| Energy.Active.Import.Register | increasing | ~4.1 kWh/hour |
 
 **Pass**: Charging stable at 6A/4.1 kW. This is the lowest valid 3-phase current.
 
@@ -421,12 +430,14 @@ the boundary where the CSMS decides between 1-phase and 3-phase mode.
 | 13 | CP->CSMS | MeterValues | `Power.Active.Import: ~6003W` (raw), `Current.Import L1: ~8.7A` |
 
 **Expected meter values (1-phase, 8.7A)**:
-| Measurand | Raw (wallbox) | Corrected (CSMS) | Calculation |
-|-----------|---------------|------------------|-------------|
-| Power.Active.Import | ~6,003 W | ~2,001 W | 230 x 8.7 x 3 raw, /3 corrected |
-| Current.Import (L1) | ~8.7 A | ~8.7 A | |
+| Measurand | Raw (wallbox) | Corrected (CSMS) | Tolerance |
+|-----------|---------------|------------------|-----------|
+| Power.Active.Import | ~6,003 W | ~2,001 W | ±5% |
+| Current.Import (L1) | ~8.7 A | ~8.7 A | ±5% |
 | Current.Import (L2) | 0 A | 0 A | |
 | Current.Import (L3) | 0 A | 0 A | |
+| Voltage (L1) | ~230 V | ~230 V | ±5% |
+| Energy.Active.Import.Register | increasing | ~2.0 kWh/hour (corrected) | |
 
 **Pass**: CSMS-corrected power ≈ 2 kW.
 
@@ -442,14 +453,31 @@ the boundary where the CSMS decides between 1-phase and 3-phase mode.
 | 13 | CSMS->CP | SetChargingProfile | `limit:0.0`, `chargingRateUnit:"A"` |
 | 14 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
 | 15 | CP->CSMS | StatusNotification | `status:"SuspendedEVSE"` |
-| 16 | CP->CSMS | MeterValues | `Power.Active.Import: 0W`, `Current.Import: 0A` |
-| 17 | | | *Energy meter stops incrementing* |
-| 18 | CSMS->CP | SetChargingProfile | `limit:16.0`, `chargingRateUnit:"A"` |
-| 19 | CP->CSMS | StatusNotification | `status:"Charging"` |
-| 20 | CP->CSMS | MeterValues | `Power.Active.Import: ~11040W` (resumes) |
+| 16 | CP->CSMS | MeterValues | See expected values below |
+| 17 | CSMS->CP | SetChargingProfile | `limit:16.0`, `chargingRateUnit:"A"` |
+| 18 | CP->CSMS | StatusNotification | `status:"Charging"` |
+| 19 | CP->CSMS | MeterValues | See resumed values below |
+
+**Expected meter values (suspended, 0A)**:
+| Measurand | Expected |
+|-----------|----------|
+| Power.Active.Import | 0 W |
+| Current.Import (L1) | 0 A |
+| Current.Import (L2) | 0 A |
+| Current.Import (L3) | 0 A |
+| Energy.Active.Import.Register | unchanged (no increment) |
+
+**Expected meter values (resumed, 16A)**:
+| Measurand | Expected | Tolerance |
+|-----------|----------|-----------|
+| Power.Active.Import | ~11,040 W | ±5% |
+| Current.Import (L1) | ~16 A | ±5% |
+| Current.Import (L2) | ~16 A | ±5% |
+| Current.Import (L3) | ~16 A | ±5% |
+| Energy.Active.Import.Register | increasing | ~11 kWh/hour |
 
 **Pass**: Charging suspends at 0A (no fault), resumes when limit restored.
-Energy meter does not increment during suspension.
+Energy meter stops during suspension and resumes after.
 
 #### TC-109: Charge at 0 kW — Wallbox Stops Transaction (0A, 0 kW)
 
@@ -491,62 +519,147 @@ Run TC-016 first to verify the wallbox supports power-based profiles.
 
 **Purpose**: Full charge cycle using power-based profile.
 
-Same flow as TC-100, except:
+**Setup**: Phase mode = 3-phase, TC-016 completed (W profiles supported).
 
-| Step | Change from TC-100 |
-|------|--------------------|
-| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:11040.0` |
-| 13 | MeterValues: `Power.Active.Import: ~11040W`, `Current.Import: ~16A` |
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1-10 | | | Same as TC-100 steps 1-10 |
+| 11 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:11040.0` |
+| 12 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 13 | CP->CSMS | MeterValues | See expected values below |
 
-**Pass**: Same result as TC-100. Wallbox translates W to A internally.
+**Expected meter values (3-phase, 11040W)**:
+| Measurand | Expected | Tolerance |
+|-----------|----------|-----------|
+| Power.Active.Import | ~11,040 W | ±5% |
+| Current.Import (L1) | ~16 A | ±5% |
+| Current.Import (L2) | ~16 A | ±5% |
+| Current.Import (L3) | ~16 A | ±5% |
+| Voltage (L1/L2/L3) | ~230 V | ±5% |
+| Energy.Active.Import.Register | increasing | ~11 kWh/hour |
+
+**Pass**: Wallbox converts 11040W to ~16A per phase, meter values match TC-100.
 
 #### TC-111: Charge at 3.7 kW (1-phase, 3680W)
 
-Same flow as TC-101, except:
+**Setup**: Phase mode = 1-phase, TC-016 completed.
 
-| Step | Change from TC-101 |
-|------|--------------------|
-| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:3680.0` |
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1-10 | | | Same as TC-101 steps 1-10 |
+| 11 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:3680.0` |
+| 12 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 13 | CP->CSMS | MeterValues | See expected values below |
 
-**Note**: The profile limit is the **actual** target power (3680W), not the raw
-3-phase equivalent. The wallbox converts to per-phase current: 3680 / 230 = 16A on L1.
+**Expected meter values (1-phase, 3680W)**:
+| Measurand | Raw (wallbox) | Corrected (CSMS) | Tolerance |
+|-----------|---------------|------------------|-----------|
+| Power.Active.Import | ~11,040 W | ~3,680 W | ±5% |
+| Current.Import (L1) | ~16 A | ~16 A | ±5% |
+| Current.Import (L2) | 0 A | 0 A | |
+| Current.Import (L3) | 0 A | 0 A | |
+| Energy.Active.Import.Register | increasing | ~3.68 kWh/hour (corrected) | |
+
+**Note**: Profile limit is the **actual** target power (3680W), not the raw
+3-phase equivalent. Wallbox converts: 3680 / 230 = 16A on L1.
+
+**Pass**: Wallbox charges at 16A on L1, CSMS corrects power to 3680W.
 
 #### TC-112: Charge at 7 kW (3-phase, 6900W)
 
-Same flow as TC-102, except:
+**Setup**: Phase mode = 3-phase, TC-016 completed.
 
-| Step | Change from TC-102 |
-|------|--------------------|
-| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:6900.0` |
-| 13 | MeterValues: `Power.Active.Import: ~6900W`, `Current.Import: ~10A` |
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1-10 | | | Same as TC-100 steps 1-10 |
+| 11 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:6900.0` |
+| 12 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 13 | CP->CSMS | MeterValues | See expected values below |
+
+**Expected meter values (3-phase, 6900W)**:
+| Measurand | Expected | Tolerance |
+|-----------|----------|-----------|
+| Power.Active.Import | ~6,900 W | ±5% |
+| Current.Import (L1) | ~10 A | ±5% |
+| Current.Import (L2) | ~10 A | ±5% |
+| Current.Import (L3) | ~10 A | ±5% |
+| Energy.Active.Import.Register | increasing | ~6.9 kWh/hour |
+
+**Pass**: Wallbox converts 6900W to ~10A per phase.
 
 #### TC-113: Charge at 4.1 kW (3-phase, 4140W)
 
-Same flow as TC-103, except:
+**Setup**: Phase mode = 3-phase, TC-016 completed.
 
-| Step | Change from TC-103 |
-|------|--------------------|
-| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:4140.0` |
-| 13 | MeterValues: `Power.Active.Import: ~4140W`, `Current.Import: ~6A` |
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1-10 | | | Same as TC-100 steps 1-10 |
+| 11 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:4140.0` |
+| 12 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 13 | CP->CSMS | MeterValues | See expected values below |
+
+**Expected meter values (3-phase, 4140W)**:
+| Measurand | Expected | Tolerance |
+|-----------|----------|-----------|
+| Power.Active.Import | ~4,140 W | ±5% |
+| Current.Import (L1) | ~6 A | ±5% |
+| Current.Import (L2) | ~6 A | ±5% |
+| Current.Import (L3) | ~6 A | ±5% |
+| Energy.Active.Import.Register | increasing | ~4.1 kWh/hour |
+
+**Pass**: Wallbox converts 4140W to ~6A per phase (minimum 3-phase current).
 
 #### TC-114: Charge at 2 kW (1-phase, 2000W)
 
-Same flow as TC-104, except:
+**Setup**: Phase mode = 1-phase, TC-016 completed.
 
-| Step | Change from TC-104 |
-|------|--------------------|
-| 11 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:2000.0` |
-| 13 | MeterValues: `Power.Active.Import: ~6000W` (raw), corrected ~2000W |
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1-10 | | | Same as TC-101 steps 1-10 |
+| 11 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:2000.0` |
+| 12 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 13 | CP->CSMS | MeterValues | See expected values below |
+
+**Expected meter values (1-phase, 2000W)**:
+| Measurand | Raw (wallbox) | Corrected (CSMS) | Tolerance |
+|-----------|---------------|------------------|-----------|
+| Power.Active.Import | ~6,003 W | ~2,001 W | ±5% |
+| Current.Import (L1) | ~8.7 A | ~8.7 A | ±5% |
+| Current.Import (L2) | 0 A | 0 A | |
+| Current.Import (L3) | 0 A | 0 A | |
+| Energy.Active.Import.Register | increasing | ~2.0 kWh/hour (corrected) | |
+
+**Pass**: Wallbox converts 2000W to ~8.7A on L1, CSMS corrects power to ~2 kW.
 
 #### TC-115: Charge at 0 kW (Suspend, 0W)
 
-Same flow as TC-105, except:
+**Setup**: Charging in progress, TC-016 completed.
 
-| Step | Change from TC-105 |
-|------|--------------------|
-| 13 | SetChargingProfile: `chargingRateUnit:"W"`, `limit:0.0` |
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 1-12 | | | Charging at 11040W (TC-110 steps 1-12) |
+| 13 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:0.0` |
+| 14 | CP->CSMS | SetChargingProfile.conf | `status:"Accepted"` |
+| 15 | CP->CSMS | StatusNotification | `status:"SuspendedEVSE"` |
+| 16 | CP->CSMS | MeterValues | See expected values below |
 
-**Pass**: Same behavior as TC-105 — wallbox suspends, resumes when limit restored.
+**Expected meter values (suspended, 0W)**:
+| Measurand | Expected |
+|-----------|----------|
+| Power.Active.Import | 0 W |
+| Current.Import (L1) | 0 A |
+| Current.Import (L2) | 0 A |
+| Current.Import (L3) | 0 A |
+| Energy.Active.Import.Register | unchanged (no increment) |
+
+| Step | Direction | Message | Payload / Check |
+|------|-----------|---------|-----------------|
+| 17 | CSMS->CP | SetChargingProfile | `chargingRateUnit:"W"`, `limit:11040.0` |
+| 18 | CP->CSMS | StatusNotification | `status:"Charging"` |
+| 19 | CP->CSMS | MeterValues | `Power.Active.Import: ~11040W` (resumes) |
+
+**Pass**: Wallbox suspends at 0W, resumes at 11040W. No fault, energy meter
+stops during suspension and resumes after.
 
 ### 4.2c Power-Based vs Current-Based Summary
 

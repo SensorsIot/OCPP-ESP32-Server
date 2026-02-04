@@ -466,83 +466,82 @@ Network Separation:
 - **MQTT-005**: System SHALL reconnect automatically on disconnect
 - **MQTT-006**: System SHALL log MQTT connection status changes
 
-#### 4.6.2 Topic Structure
+#### 4.6.2 Topic Structure (Simplified)
 
 Base topic: `ocpp/{chargepoint_id}/` (configurable prefix)
 
 | Topic | Direction | QoS | Description |
 |-------|-----------|-----|-------------|
-| `status` | Publish | 1 | Connector status |
-| `session` | Publish | 1 | Active session info |
-| `meter` | Publish | 0 | Meter values |
-| `availability` | Publish | 1 | Availability state |
-| `error` | Publish | 1 | Error codes |
-| `command/start` | Subscribe | 1 | Start charging |
-| `command/stop` | Subscribe | 1 | Stop charging |
-| `command/limit` | Subscribe | 1 | Set current limit |
-| `command/availability` | Subscribe | 1 | Set availability |
-| `command/reset` | Subscribe | 1 | Reset charger |
-| `command/config/get` | Subscribe | 1 | Get configuration |
-| `command/config/set` | Subscribe | 1 | Set configuration |
+| `status` | Publish | 1 | Wallbox connection + connector status |
+| `session` | Publish | 1 | Active transaction with meter values (consolidated) |
+| `phase` | Publish | 1 | Current phase mode (for monitoring) |
+| `command/start` | Subscribe | 1 | Start charging transaction |
+| `command/stop` | Subscribe | 1 | Stop charging transaction |
+| `command/limit` | Subscribe | 1 | Set power limit (triggers automatic phase switching) |
+
+**Removed topics (simplified):**
+- ~~`meter`~~ → Merged into `session`
+- ~~`availability`~~ → Use `command/stop` + don't send `command/start`
+- ~~`command/availability`~~ → Use start/stop instead
+- ~~`command/phase`~~ → Automatic based on power limit threshold
+- ~~`command/config/*`~~ → Use serial console or captive portal
+- ~~`command/reset`~~ → Use serial console or captive portal
 
 #### 4.6.3 Message Formats
 
 **Status Message (Published)**
+Published on wallbox connect/disconnect and connector status changes.
 ```json
 {
   "timestamp": "2026-01-25T10:30:00Z",
-  "connector_id": 1,
+  "connected": true,
   "status": "Charging",
-  "error_code": "NoError",
-  "vendor_error": ""
+  "error_code": "NoError"
 }
 ```
 
 **Session Message (Published)**
+Published periodically during active transaction (includes meter values).
 ```json
 {
   "timestamp": "2026-01-25T10:30:00Z",
   "transaction_id": 12345,
-  "connector_id": 1,
   "id_tag": "RFID123456",
-  "meter_start": 1000,
-  "meter_current": 1500,
-  "energy_kwh": 0.5,
-  "duration_seconds": 1800,
-  "current_power_kw": 7.4
+  "energy_wh": 1500,
+  "power_w": 7400,
+  "current_a": 32.0,
+  "duration_s": 1800,
+  "phase_mode": "3-phase"
 }
 ```
 
-**Meter Values Message (Published)**
+**Phase Message (Published)**
+Published on phase mode changes.
 ```json
 {
   "timestamp": "2026-01-25T10:30:00Z",
-  "connector_id": 1,
-  "transaction_id": 12345,
-  "values": {
-    "energy_wh": 1500,
-    "power_w": 7400,
-    "current_a": 32.0,
-    "voltage_v": 230,
-    "soc_percent": 45
-  }
+  "phase_mode": "3-phase",
+  "power_correction_factor": 1.0
 }
 ```
 
 **Start Command (Subscribed)**
 ```json
 {
-  "connector_id": 1,
   "id_tag": "ENERGY_MANAGER"
 }
 ```
 
+**Stop Command (Subscribed)**
+```json
+{}
+```
+
 **Limit Command (Subscribed)**
+Sets power limit. Phase switching is automatic based on threshold (< 4.1 kW = 1-phase, >= 4.1 kW = 3-phase).
 ```json
 {
-  "connector_id": 1,
-  "current_limit_a": 16.0,
-  "duration_seconds": 3600
+  "power_w": 7400
 }
 ```
 
@@ -929,37 +928,12 @@ Topic: `ocpp/{charger_id}/phase`
 {
   "timestamp": "2026-01-25T10:30:00Z",
   "phase_mode": "3-phase",
-  "phases_active": [true, true, true],
-  "can_switch": true,
-  "switching_in_progress": false,
-  "switch_state": "idle",
   "power_correction_factor": 1.0
 }
 ```
 
-**Phase Switch Result (Published):**
-Topic: `ocpp/{charger_id}/phase/result`
-```json
-{
-  "timestamp": "2026-01-25T10:30:00Z",
-  "success": true,
-  "old_mode": "3-phase",
-  "new_mode": "1-phase",
-  "transaction_stopped": 12345,
-  "transaction_started": 12346,
-  "switch_duration_ms": 8500,
-  "error": null
-}
-```
-
-**Phase Command (Subscribed):**
-Topic: `ocpp/{charger_id}/command/phase`
-```json
-{
-  "mode": "1-phase"
-}
-```
-Valid modes: `"1-phase"`, `"3-phase"`, `"auto"`
+**Note:** Phase switching is automatic based on `command/limit` power threshold (see 4.10.8).
+No manual `command/phase` topic - phase mode is determined by requested power level.
 
 #### 4.10.8 Automatic Phase Switching Logic
 
@@ -1048,7 +1022,26 @@ No physical LEDs are used. Status is communicated via:
 - **LOG-003**: System SHALL include timestamps in logs
 - **LOG-004**: System MAY publish logs to MQTT (debug topic)
 
-#### 4.12.2 Diagnostics
+#### 4.12.2 OCPP Message Logging (Critical)
+- **LOG-010**: System SHALL log all OCPP messages received from wallbox
+- **LOG-011**: System SHALL log all OCPP messages sent to wallbox
+- **LOG-012**: Log format SHALL include direction (RX/TX), message type, action, and payload
+- **LOG-013**: At INFO level, log action name and key fields only
+- **LOG-014**: At DEBUG level, log full JSON payload
+
+**Log Format Example:**
+```
+I (12345) OCPP: RX [2,"abc123","StatusNotification",{"connectorId":1,"status":"Charging"}]
+I (12346) OCPP: TX [3,"abc123",{"status":"Accepted"}]
+```
+
+**Abbreviated Format (INFO level):**
+```
+I (12345) OCPP: RX StatusNotification: connector=1 status=Charging
+I (12346) OCPP: TX StatusNotification.conf: Accepted
+```
+
+#### 4.12.3 Diagnostics
 - **DIAG-001**: System SHALL expose status via MQTT
 - **DIAG-002**: System SHALL report memory usage
 - **DIAG-003**: System SHALL report uptime

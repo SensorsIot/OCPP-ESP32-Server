@@ -26,6 +26,8 @@ typedef struct {
     int      connector_id;
     int32_t  meter_start;
     int32_t  meter_current;
+    int32_t  power_w;             /* current power in watts */
+    float    current_a;           /* current in amps */
     int64_t  start_time;          /* unix timestamp ms */
     ocpp_status_t status;
     char     charge_point_id[64];

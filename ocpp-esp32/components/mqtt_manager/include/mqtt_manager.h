@@ -32,3 +32,8 @@ esp_err_t mqtt_publish(const char *topic, const char *json_str, int qos);
 esp_err_t mqtt_publish_phase_result(bool success, const char *old_mode,
                                      const char *new_mode, int duration_ms,
                                      const char *error);
+
+/**
+ * Publish current phase status.
+ */
+esp_err_t mqtt_publish_phase_status(const char *phase_mode, float correction_factor);

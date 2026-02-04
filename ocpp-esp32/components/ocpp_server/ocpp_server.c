@@ -74,6 +74,9 @@ static esp_err_t ws_send(const char *data)
 {
     if (s_ws_fd < 0 || !s_server) return ESP_ERR_INVALID_STATE;
 
+    /* LOG-011: Log all OCPP messages sent to wallbox */
+    ESP_LOGI(TAG, "TX %s", data);
+
     httpd_ws_frame_t frame = {
         .type = HTTPD_WS_TYPE_TEXT,
         .payload = (uint8_t *)data,
@@ -301,6 +304,9 @@ static void handle_call_result(const char *action, const cJSON *payload)
 
 static void route_message(const char *data, int len)
 {
+    /* LOG-010: Log all OCPP messages received from wallbox */
+    ESP_LOGI(TAG, "RX %.*s", len > 500 ? 500 : len, data);
+
     ocpp_parsed_msg_t msg;
     if (ocpp_msg_parse(data, len, &msg) != 0) {
         ESP_LOGW(TAG, "Failed to parse OCPP message");
@@ -309,7 +315,7 @@ static void route_message(const char *data, int len)
 
     switch (msg.type) {
     case OCPP_MSG_CALL: {
-        ESP_LOGI(TAG, "RX Call: %s [%s]", msg.action, msg.unique_id);
+        ESP_LOGI(TAG, "RX %s [%s]", msg.action, msg.unique_id);
 
         if (strcmp(msg.action, "BootNotification") == 0)
             handle_boot_notification(msg.unique_id, msg.payload);
@@ -363,7 +369,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
         /* WebSocket handshake */
-        ESP_LOGI(TAG, "WS handshake from fd=%d uri=%s", httpd_req_to_sockfd(req), req->uri);
+        ESP_LOGI(TAG, "WS CONNECT fd=%d uri=%s", httpd_req_to_sockfd(req), req->uri);
         s_ws_fd = httpd_req_to_sockfd(req);
         return ESP_OK;
     }
@@ -402,7 +408,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
     if (frame.type == HTTPD_WS_TYPE_TEXT) {
         route_message((const char *)frame.payload, frame.len);
     } else if (frame.type == HTTPD_WS_TYPE_CLOSE) {
-        ESP_LOGI(TAG, "WS client closed connection");
+        ESP_LOGI(TAG, "WS CLOSE from client");
         s_ws_fd = -1;
         ocpp_session_on_disconnect();
         led_status_set(LED_ID_OCPP, LED_PATTERN_OFF);
@@ -554,9 +560,9 @@ esp_err_t ocpp_server_start(void)
         return err;
     }
 
-    /* Register WebSocket handler */
+    /* Register WebSocket handler - accept any path for charge point ID */
     static const httpd_uri_t ws_uri = {
-        .uri = "/ocpp/*",
+        .uri = "/*",
         .method = HTTP_GET,
         .handler = ws_handler,
         .is_websocket = true,
@@ -565,7 +571,10 @@ esp_err_t ocpp_server_start(void)
     };
     httpd_register_uri_handler(s_server, &ws_uri);
 
+    ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "OCPP WebSocket server started on port %d", cfg->ws_port);
+    ESP_LOGI(TAG, "Accepting connections on /* (any path)");
+    ESP_LOGI(TAG, "========================================");
     return ESP_OK;
 }
 

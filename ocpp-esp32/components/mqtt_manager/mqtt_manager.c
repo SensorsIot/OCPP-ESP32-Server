@@ -8,11 +8,13 @@
 #include "mqtt_client.h"
 #include "esp_log.h"
 #include "esp_event.h"
+#include "esp_timer.h"
 #include "cJSON.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <inttypes.h>
 
 static const char *TAG = "mqtt_mgr";
 
@@ -38,53 +40,31 @@ static void get_timestamp(char *buf, size_t sz)
 
 /* ---------- OCPP callbacks → MQTT publish ---------- */
 
+/* Publish status (simplified FSD 4.6.2) */
 static void on_ocpp_status(int connector_id, ocpp_status_t status,
                             const char *error_code)
 {
     if (!s_connected) return;
 
+    const ocpp_session_t *sess = ocpp_server_get_session();
+
     cJSON *root = cJSON_CreateObject();
     char ts[30];
     get_timestamp(ts, sizeof(ts));
     cJSON_AddStringToObject(root, "timestamp", ts);
-    cJSON_AddNumberToObject(root, "connector_id", connector_id);
+    cJSON_AddBoolToObject(root, "connected", sess->connected);
     cJSON_AddStringToObject(root, "status", ocpp_status_str(status));
     cJSON_AddStringToObject(root, "error_code", error_code);
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
 
+    ESP_LOGI(TAG, "MQTT publish status: %s error=%s", ocpp_status_str(status), error_code);
     mqtt_publish("status", json, 1);
-
-    /* Publish to dedicated availability topic */
-    const char *st = ocpp_status_str(status);
-    if (strcmp(st, "Available") == 0 || strcmp(st, "Unavailable") == 0) {
-        cJSON *avail = cJSON_CreateObject();
-        cJSON_AddStringToObject(avail, "timestamp", ts);
-        cJSON_AddNumberToObject(avail, "connector_id", connector_id);
-        cJSON_AddStringToObject(avail, "availability", st);
-        char *avail_json = cJSON_PrintUnformatted(avail);
-        cJSON_Delete(avail);
-        mqtt_publish("availability", avail_json, 1);
-        free(avail_json);
-    }
-
-    /* Publish to error topic on faults */
-    if (strcmp(error_code, "NoError") != 0) {
-        cJSON *err = cJSON_CreateObject();
-        cJSON_AddStringToObject(err, "timestamp", ts);
-        cJSON_AddNumberToObject(err, "connector_id", connector_id);
-        cJSON_AddStringToObject(err, "error_code", error_code);
-        cJSON_AddStringToObject(err, "status", st);
-        char *err_json = cJSON_PrintUnformatted(err);
-        cJSON_Delete(err);
-        mqtt_publish("error", err_json, 1);
-        free(err_json);
-    }
-
     free(json);
 }
 
+/* Publish session with meter values (simplified FSD 4.6.2 - consolidated) */
 static void on_ocpp_session(const ocpp_session_t *session, bool started)
 {
     if (!s_connected) return;
@@ -94,42 +74,43 @@ static void on_ocpp_session(const ocpp_session_t *session, bool started)
     get_timestamp(ts, sizeof(ts));
     cJSON_AddStringToObject(root, "timestamp", ts);
     cJSON_AddNumberToObject(root, "transaction_id", session->transaction_id);
-    cJSON_AddNumberToObject(root, "connector_id", session->connector_id);
     cJSON_AddStringToObject(root, "id_tag", session->id_tag);
-    cJSON_AddNumberToObject(root, "meter_start", session->meter_start);
-    cJSON_AddNumberToObject(root, "meter_current", session->meter_current);
-    cJSON_AddBoolToObject(root, "active", started);
 
-    if (!started) {
-        int energy = session->meter_current - session->meter_start;
-        cJSON_AddNumberToObject(root, "energy_wh", energy);
-    }
+    int energy_wh = session->meter_current - session->meter_start;
+    cJSON_AddNumberToObject(root, "energy_wh", energy_wh);
+    cJSON_AddNumberToObject(root, "power_w", session->power_w);
+    cJSON_AddNumberToObject(root, "current_a", session->current_a);
+
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    int duration_s = (int)((now_ms - session->start_time) / 1000);
+    cJSON_AddNumberToObject(root, "duration_s", duration_s);
+
+    /* Get phase mode from phase_control */
+    const char *phase_str = (phase_control_get_mode() == PHASE_MODE_1) ? "1-phase" : "3-phase";
+    cJSON_AddStringToObject(root, "phase_mode", phase_str);
+
+    cJSON_AddBoolToObject(root, "active", started);
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
 
+    ESP_LOGI(TAG, "MQTT publish session: txn=%d energy=%dWh power=%" PRId32 "W",
+             session->transaction_id, energy_wh, session->power_w);
     mqtt_publish("session", json, 1);
     free(json);
 }
 
+/* Meter values callback - publish consolidated session (FSD 4.6.2) */
 static void on_ocpp_meter(int connector_id, int transaction_id,
                            const cJSON *values)
 {
-    if (!s_connected || !values) return;
+    if (!s_connected) return;
 
-    cJSON *root = cJSON_CreateObject();
-    char ts[30];
-    get_timestamp(ts, sizeof(ts));
-    cJSON_AddStringToObject(root, "timestamp", ts);
-    cJSON_AddNumberToObject(root, "connector_id", connector_id);
-    cJSON_AddNumberToObject(root, "transaction_id", transaction_id);
-    cJSON_AddItemToObject(root, "values", cJSON_Duplicate(values, true));
-
-    char *json = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-
-    mqtt_publish("meter", json, 0);
-    free(json);
+    /* Re-use session publisher with updated meter values */
+    const ocpp_session_t *session = ocpp_server_get_session();
+    if (session->active) {
+        on_ocpp_session(session, true);
+    }
 }
 
 /* ---------- MQTT command handling ---------- */
@@ -163,63 +144,45 @@ static void handle_command(const char *topic, const char *data, int data_len)
         }
 
     } else if (strcmp(sub, "limit") == 0) {
-        cJSON *conn = cJSON_GetObjectItem(root, "connector_id");
-        cJSON *limit = cJSON_GetObjectItem(root, "current_limit_a");
-        cJSON *power = cJSON_GetObjectItem(root, "power_limit_kw");
+        /* Simplified: power_w triggers automatic phase switching (FSD 4.6.2) */
+        cJSON *power_w = cJSON_GetObjectItem(root, "power_w");
 
-        float amps = 0;
-        if (limit && cJSON_IsNumber(limit)) {
-            amps = (float)limit->valuedouble;
-        } else if (power && cJSON_IsNumber(power)) {
-            /* Convert kW to amps (single phase 230V) */
-            amps = (float)(power->valuedouble * 1000.0 / 230.0);
-        }
+        if (power_w && cJSON_IsNumber(power_w)) {
+            int watts = (int)power_w->valuedouble;
+            ESP_LOGI(TAG, "Power limit command: %dW", watts);
 
-        if (amps > 0) {
-            int cid = (conn && cJSON_IsNumber(conn)) ? (int)conn->valuedouble : 1;
-            cJSON *profile = ocpp_profile_build_set_payload(cid, amps, "TxDefaultProfile");
+            /* Automatic phase switching based on power threshold (FSD 4.10.8) */
+            /* < 4100W = 1-phase, >= 4100W = 3-phase */
+            phase_mode_t current = phase_control_get_mode();
+            phase_mode_t target = (watts < 4100) ? PHASE_MODE_1 : PHASE_MODE_3;
+
+            if (target != current) {
+                ESP_LOGI(TAG, "Auto phase switch: %s -> %s (power=%dW)",
+                         current == PHASE_MODE_1 ? "1-phase" : "3-phase",
+                         target == PHASE_MODE_1 ? "1-phase" : "3-phase",
+                         watts);
+                phase_control_request_switch(target);
+            }
+
+            /* Convert watts to amps based on phase mode */
+            float amps;
+            if (target == PHASE_MODE_1) {
+                /* 1-phase: P = V * I, I = P / V */
+                amps = (float)watts / 230.0f;
+            } else {
+                /* 3-phase: P = 3 * V * I, I = P / (3 * V) */
+                amps = (float)watts / (3.0f * 230.0f);
+            }
+
+            /* Cap at 16A max */
+            if (amps > 16.0f) amps = 16.0f;
+
+            cJSON *profile = ocpp_profile_build_set_payload(1, amps, "TxDefaultProfile");
             cJSON *cs = cJSON_GetObjectItem(profile, "csChargingProfiles");
             if (cs) {
-                ocpp_send_set_charging_profile(cid, cs);
+                ocpp_send_set_charging_profile(1, cs);
             }
             cJSON_Delete(profile);
-        }
-
-    } else if (strcmp(sub, "availability") == 0) {
-        cJSON *conn = cJSON_GetObjectItem(root, "connector_id");
-        cJSON *type = cJSON_GetObjectItem(root, "type");
-        int cid = (conn && cJSON_IsNumber(conn)) ? (int)conn->valuedouble : 0;
-        const char *t = (type && cJSON_IsString(type)) ? type->valuestring : "Operative";
-        ocpp_send_change_availability(cid, t);
-
-    } else if (strcmp(sub, "reset") == 0) {
-        cJSON *type = cJSON_GetObjectItem(root, "type");
-        const char *t = (type && cJSON_IsString(type)) ? type->valuestring : "Soft";
-        ocpp_send_reset(t);
-
-    } else if (strcmp(sub, "config/get") == 0) {
-        cJSON *key = cJSON_GetObjectItem(root, "key");
-        const char *k = (key && cJSON_IsString(key)) ? key->valuestring : NULL;
-        ocpp_send_get_configuration(k);
-
-    } else if (strcmp(sub, "config/set") == 0) {
-        cJSON *key = cJSON_GetObjectItem(root, "key");
-        cJSON *val = cJSON_GetObjectItem(root, "value");
-        if (key && val && cJSON_IsString(key) && cJSON_IsString(val)) {
-            ocpp_send_change_configuration(key->valuestring, val->valuestring);
-        }
-
-    } else if (strcmp(sub, "phase") == 0) {
-        cJSON *mode = cJSON_GetObjectItem(root, "mode");
-        if (mode && cJSON_IsString(mode)) {
-            phase_mode_t target;
-            if (strcmp(mode->valuestring, "1-phase") == 0 ||
-                strcmp(mode->valuestring, "1") == 0) {
-                target = PHASE_MODE_1;
-            } else {
-                target = PHASE_MODE_3;
-            }
-            phase_control_request_switch(target);
         }
 
     } else {
@@ -285,6 +248,15 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
 esp_err_t mqtt_manager_start(void)
 {
     const config_t *cfg = config_get();
+
+    /* Enable verbose MQTT library logging for debugging */
+    esp_log_level_set("MQTT_CLIENT", ESP_LOG_DEBUG);
+    esp_log_level_set("TRANSPORT_BASE", ESP_LOG_DEBUG);
+    esp_log_level_set("TRANSPORT", ESP_LOG_DEBUG);
+    esp_log_level_set("OUTBOX", ESP_LOG_DEBUG);
+
+    ESP_LOGI(TAG, "MQTT config: host='%s' port=%d prefix='%s' client_id='%s'",
+             cfg->mqtt_host, cfg->mqtt_port, cfg->mqtt_prefix, cfg->mqtt_client_id);
 
     if (cfg->mqtt_host[0] == '\0') {
         ESP_LOGW(TAG, "No MQTT host configured, skipping");
@@ -387,6 +359,24 @@ esp_err_t mqtt_publish_phase_result(bool success, const char *old_mode,
     cJSON_Delete(root);
 
     esp_err_t ret = mqtt_publish("phase/result", json, 1);
+    free(json);
+    return ret;
+}
+
+esp_err_t mqtt_publish_phase_status(const char *phase_mode, float correction_factor)
+{
+    cJSON *root = cJSON_CreateObject();
+    char ts[30];
+    get_timestamp(ts, sizeof(ts));
+    cJSON_AddStringToObject(root, "timestamp", ts);
+    cJSON_AddStringToObject(root, "phase_mode", phase_mode);
+    cJSON_AddNumberToObject(root, "power_correction_factor", correction_factor);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    ESP_LOGI(TAG, "MQTT publish phase: %s factor=%.1f", phase_mode, correction_factor);
+    esp_err_t ret = mqtt_publish("phase", json, 1);
     free(json);
     return ret;
 }

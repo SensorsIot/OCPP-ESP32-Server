@@ -5,6 +5,7 @@
 
 #include <string.h>
 #include <time.h>
+#include <inttypes.h>
 
 static const char *TAG = "ocpp_sess";
 
@@ -143,7 +144,7 @@ void ocpp_session_on_stop_transaction(int transaction_id, int meter_stop,
 void ocpp_session_on_meter_values(int connector_id, int transaction_id,
                                     const cJSON *meter_values)
 {
-    /* Update current meter reading if available */
+    /* Update meter readings if available */
     if (meter_values && cJSON_IsArray(meter_values)) {
         cJSON *first = cJSON_GetArrayItem(meter_values, 0);
         if (first) {
@@ -154,14 +155,22 @@ void ocpp_session_on_meter_values(int connector_id, int transaction_id,
                     cJSON *measurand = cJSON_GetObjectItem(sv, "measurand");
                     cJSON *value = cJSON_GetObjectItem(sv, "value");
                     if (measurand && value && cJSON_IsString(value)) {
-                        if (strcmp(measurand->valuestring, "Energy.Active.Import.Register") == 0) {
+                        const char *m = measurand->valuestring;
+                        if (strcmp(m, "Energy.Active.Import.Register") == 0) {
                             s_session.meter_current = atoi(value->valuestring);
+                        } else if (strcmp(m, "Power.Active.Import") == 0) {
+                            s_session.power_w = atoi(value->valuestring);
+                        } else if (strcmp(m, "Current.Import") == 0) {
+                            s_session.current_a = (float)atof(value->valuestring);
                         }
                     }
                 }
             }
         }
     }
+
+    ESP_LOGI(TAG, "MeterValues: energy=%" PRId32 "Wh power=%" PRId32 "W current=%.1fA",
+             s_session.meter_current, s_session.power_w, s_session.current_a);
 
     for (int i = 0; i < MAX_CBS; i++) {
         if (s_meter_cbs[i]) s_meter_cbs[i](connector_id, transaction_id, meter_values);

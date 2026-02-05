@@ -1,8 +1,8 @@
 # WiFi Connection Test Cases - Functional Specification
 
-**Extracted from**: ocpp-esp32-fsd.md  
-**Version**: 1.0  
-**Date**: 2026-02-05  
+**Extracted from**: ocpp-esp32-fsd.md
+**Version**: 1.1
+**Date**: 2026-02-05
 **Status**: Reference Document
 
 ---
@@ -222,6 +222,89 @@ The ESP32 OCPP Server uses a dual-network architecture:
 
 **Pass Criteria**: Automatic lease renewal, connection recovery.
 
+### 4.9 EC-116: Software Watchdog - Task Timeout Detection
+
+**Objective**: Verify software watchdog detects hung tasks and recovers.
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | System running normally | All tasks healthy |
+| 2 | Monitor serial log | Health checks every 5 seconds |
+| 3 | Simulate task hang (test firmware) | Stop task heartbeat updates |
+| 4 | Wait 60+ seconds | Software watchdog triggers |
+| 5 | Check serial log | "Task timeout - triggering reboot" |
+| 6 | System reboots automatically | ESP.restart() called |
+| 7 | After reboot | Normal operation resumes |
+| 8 | Verify WiFi reconnects | MQTT connection restored |
+
+**Pass Criteria**: Hung task detected within 65s, automatic recovery via reboot, WiFi/MQTT restored.
+
+**Note**: Requires test firmware with deliberate task hang capability, or verification via code review.
+
+### 4.10 EC-117: Hardware Watchdog Recovery
+
+**Objective**: Verify hardware watchdog provides failsafe recovery.
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | System running normally | Hardware WDT active |
+| 2 | Check serial log at startup | "Hardware WDT initialized" message |
+| 3 | Monitor normal operation | WDT fed every health check cycle |
+| 4 | If watchdog task hangs | Hardware WDT triggers after timeout |
+| 5 | System panic and reboot | Automatic hardware recovery |
+| 6 | After reboot | WiFi and MQTT reconnect |
+
+**Pass Criteria**: Hardware watchdog provides failsafe recovery if software watchdog itself fails.
+
+**Note**: This is a safety-net test. In normal operation, software watchdog handles recovery before hardware WDT triggers.
+
+### 4.11 EC-118: Watchdog Stability During WiFi Disconnect
+
+**Objective**: Verify watchdog does not false-trigger during normal WiFi reconnection.
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | System running, WiFi connected | Watchdog task active |
+| 2 | Disable WiFi AP | Connection lost |
+| 3 | Wait 5 minutes | Extended disconnect period |
+| 4 | Monitor serial log | Health checks continue (every 5s) |
+| 5 | No watchdog resets | System remains stable |
+| 6 | Re-enable WiFi AP | Connection restored |
+| 7 | MQTT reconnects | Normal operation resumes |
+
+**Pass Criteria**: Watchdog operates independently of WiFi state, no false triggers during reconnection.
+
+### 4.12 EC-119: Critical Memory Watchdog
+
+**Objective**: Verify system reboots before memory exhaustion causes crash.
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | System running normally | Heap above threshold |
+| 2 | Monitor heap via MQTT/serial | free_heap values logged |
+| 3 | Simulate memory pressure | Allocate memory (test firmware) |
+| 4 | Heap drops below warning threshold | "Low heap" warning logged |
+| 5 | Heap drops below critical threshold | "Critical heap - triggering reboot" |
+| 6 | System reboots automatically | Preventive recovery |
+| 7 | After reboot | Memory recovered, WiFi reconnects |
+
+**Pass Criteria**: Critical memory exhaustion triggers preventive reboot before crash.
+
+### 4.13 EC-120: Watchdog During OTA Update
+
+**Objective**: Verify watchdog does not interfere with OTA updates.
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Start OTA firmware update | Upload begins |
+| 2 | Monitor watchdog during upload | WDT continues to be fed |
+| 3 | Update takes > 60 seconds | No watchdog timeout |
+| 4 | Update completes | Success, system reboots |
+| 5 | New firmware starts | Watchdog initializes |
+| 6 | WiFi reconnects | Normal operation |
+
+**Pass Criteria**: OTA update completes without watchdog interference.
+
 ---
 
 ## 5. Test Environment Setup
@@ -263,3 +346,4 @@ iw dev wlan0 link
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-02-05 | Initial extraction from ocpp-esp32-fsd.md |
+| 1.1 | 2026-02-05 | Added watchdog test cases (EC-116 to EC-120) |

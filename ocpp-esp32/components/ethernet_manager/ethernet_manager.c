@@ -1,10 +1,8 @@
 #include "ethernet_manager.h"
 #include "board_pins.h"
-#include "config_manager.h"
 #include "led_status.h"
 
 #include "driver/gpio.h"
-#include "driver/spi_master.h"
 #include "esp_eth.h"
 #include "esp_eth_driver.h"
 #include "esp_event.h"
@@ -62,53 +60,53 @@ static void got_ip_handler(void *arg, esp_event_base_t base,
 
 esp_err_t ethernet_manager_init(void)
 {
-    const config_t *cfg = config_get();
+    ESP_LOGI(TAG, "Initializing Ethernet MAC for WT32-ETH01...");
 
-    /* SPI bus configuration */
-    spi_bus_config_t buscfg = {
-        .miso_io_num   = PIN_ETH_MISO,
-        .mosi_io_num   = PIN_ETH_MOSI,
-        .sclk_io_num   = PIN_ETH_SCK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-    };
-    esp_err_t err = spi_bus_initialize(ETH_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    /* SPI device config for W5500 (device allocated internally by driver) */
-    spi_device_interface_config_t devcfg = {
-        .mode = 0,
-        .clock_speed_hz = ETH_SPI_CLOCK_MHZ * 1000 * 1000,
-        .spics_io_num = PIN_ETH_CS,
-        .queue_size = 20,
-    };
-
-    /* W5500 MAC — v5.4 API takes SPI host + device config pointer */
-    eth_w5500_config_t w5500_cfg = ETH_W5500_DEFAULT_CONFIG(ETH_SPI_HOST, &devcfg);
-    w5500_cfg.int_gpio_num = PIN_ETH_INT;
+    /* Internal EMAC configuration for RMII */
+    eth_esp32_emac_config_t emac_cfg = ETH_ESP32_EMAC_DEFAULT_CONFIG();
+    emac_cfg.smi_mdc_gpio_num = PIN_ETH_MDC;
+    emac_cfg.smi_mdio_gpio_num = PIN_ETH_MDIO;
+    emac_cfg.clock_config.rmii.clock_mode = EMAC_CLK_EXT_IN;
+    emac_cfg.clock_config.rmii.clock_gpio = EMAC_CLK_IN_GPIO;  /* GPIO0 */
 
     eth_mac_config_t mac_cfg = ETH_MAC_DEFAULT_CONFIG();
-    esp_eth_mac_t *mac = esp_eth_mac_new_w5500(&w5500_cfg, &mac_cfg);
+    mac_cfg.sw_reset_timeout_ms = 1000;
+    esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&emac_cfg, &mac_cfg);
     if (!mac) {
-        ESP_LOGE(TAG, "W5500 MAC creation failed");
+        ESP_LOGE(TAG, "EMAC creation failed");
         return ESP_FAIL;
     }
 
-    /* W5500 PHY */
+    ESP_LOGI(TAG, "Initializing Ethernet PHY (LAN8720A)...");
+
+    /* LAN8720 PHY */
     eth_phy_config_t phy_cfg = ETH_PHY_DEFAULT_CONFIG();
-    phy_cfg.reset_gpio_num = PIN_ETH_RST;
-    esp_eth_phy_t *phy = esp_eth_phy_new_w5500(&phy_cfg);
+    phy_cfg.phy_addr = ETH_PHY_ADDR;
+    phy_cfg.reset_gpio_num = -1;  /* No hardware reset pin on WT32-ETH01 */
+
+    esp_eth_phy_t *phy = esp_eth_phy_new_lan87xx(&phy_cfg);
     if (!phy) {
-        ESP_LOGE(TAG, "W5500 PHY creation failed");
+        ESP_LOGE(TAG, "LAN8720 PHY creation failed");
         return ESP_FAIL;
     }
+
+    /* Enable external oscillator BEFORE driver install
+     * GPIO16 is pulled down at boot to allow IO0 strapping */
+    ESP_ERROR_CHECK(gpio_set_direction(PIN_ETH_PWR, GPIO_MODE_OUTPUT));
+    ESP_ERROR_CHECK(gpio_set_level(PIN_ETH_PWR, 1));
+    vTaskDelay(pdMS_TO_TICKS(500));  /* Allow oscillator to stabilize */
+
+    ESP_LOGI(TAG, "Starting Ethernet interface...");
 
     /* Ethernet driver */
     esp_eth_config_t eth_cfg = ETH_DEFAULT_CONFIG(mac, phy);
-    ESP_ERROR_CHECK(esp_eth_driver_install(&eth_cfg, &s_eth_handle));
+    esp_err_t err = esp_eth_driver_install(&eth_cfg, &s_eth_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Ethernet driver install failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Keep auto-negotiation enabled (forced speeds didn't help) */
 
     /* Set MAC address from base MAC */
     uint8_t eth_mac_addr[6];
@@ -116,22 +114,12 @@ esp_err_t ethernet_manager_init(void)
     ESP_ERROR_CHECK(esp_eth_ioctl(s_eth_handle, ETH_CMD_S_MAC_ADDR, eth_mac_addr));
 
     /* Network interface */
-    esp_netif_inherent_config_t netif_base = ESP_NETIF_INHERENT_DEFAULT_ETH();
-    esp_netif_config_t netif_cfg = {
-        .base = &netif_base,
-        .stack = ESP_NETIF_NETSTACK_DEFAULT_ETH,
-    };
+    esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
     s_eth_netif = esp_netif_new(&netif_cfg);
-    ESP_ERROR_CHECK(esp_netif_attach(s_eth_netif, esp_eth_new_netif_glue(s_eth_handle)));
+    esp_eth_netif_glue_handle_t eth_netif_glue = esp_eth_new_netif_glue(s_eth_handle);
+    ESP_ERROR_CHECK(esp_netif_attach(s_eth_netif, eth_netif_glue));
 
-    /* Static IP */
-    ESP_ERROR_CHECK(esp_netif_dhcpc_stop(s_eth_netif));
-
-    esp_netif_ip_info_t ip_info = {0};
-    esp_netif_str_to_ip4(cfg->eth_ip, &ip_info.ip);
-    esp_netif_str_to_ip4(cfg->eth_subnet, &ip_info.netmask);
-    esp_netif_str_to_ip4(cfg->eth_gw, &ip_info.gw);
-    ESP_ERROR_CHECK(esp_netif_set_ip_info(s_eth_netif, &ip_info));
+    /* DHCP enabled by default */
 
     /* Event handlers */
     ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID,
@@ -142,8 +130,7 @@ esp_err_t ethernet_manager_init(void)
     /* Start */
     ESP_ERROR_CHECK(esp_eth_start(s_eth_handle));
 
-    ESP_LOGI(TAG, "Ethernet initialised: IP=%s SPI@%dMHz",
-             cfg->eth_ip, ETH_SPI_CLOCK_MHZ);
+    ESP_LOGI(TAG, "WT32-ETH01 Ethernet initialised (LAN8720 RMII, DHCP)");
     return ESP_OK;
 }
 

@@ -1,16 +1,16 @@
 """Wallbox Emulator - OCPP 1.6J Charge Point Simulation."""
 
-from .chargepoint import ChargePoint
-from .connector import Connector, ConnectorState
-from .meter import MeterSimulator
-from .ocpp_client import OcppClient
-from .ev_simulator import EVSimulator
+from .chargepoint import WallboxChargePoint, WallboxRuntime
+from .connector import ConnectorState
+from .meter import MeterState
+from .ocpp_client import WallboxClient
+from .ev_simulator import EvState
 
 __all__ = [
-    "ChargePoint",
-    "Connector",
+    "WallboxChargePoint",
+    "WallboxRuntime",
     "ConnectorState",
-    "MeterSimulator",
-    "OcppClient",
-    "EVSimulator",
+    "MeterState",
+    "WallboxClient",
+    "EvState",
 ]

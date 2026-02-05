@@ -32,12 +32,13 @@ static void load_defaults(void)
     /* AP SSID will be set with MAC suffix after NVS init */
     strlcpy(s_cfg.ap_pass,    "ocpp12345",      sizeof(s_cfg.ap_pass));
 
+    strlcpy(s_cfg.mqtt_host,   "192.168.0.203",  sizeof(s_cfg.mqtt_host));
     s_cfg.mqtt_port     = 1883;
     strlcpy(s_cfg.mqtt_prefix, "ocpp",           sizeof(s_cfg.mqtt_prefix));
     s_cfg.mqtt_tls      = false;
     /* mqtt_client_id default set after MAC read */
 
-    s_cfg.ws_port        = 9000;
+    s_cfg.ws_port        = 8887;
     s_cfg.hb_interval    = 60;
     s_cfg.meter_interval = 30;
     strlcpy(s_cfg.auth_mode, "accept_all",       sizeof(s_cfg.auth_mode));

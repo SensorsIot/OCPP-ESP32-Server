@@ -5,12 +5,12 @@
         "context": "."
     },
     "remoteUser": "dev",
+    "updateRemoteUserUID": false,
+    "appPort": ["2286:2222", "8081:8081", "8080:8080"],
     "features": {
         "ghcr.io/devcontainers/features/git:1": {},
         "ghcr.io/devcontainers/features/github-cli:1": {},
-        "ghcr.io/devcontainers/features/sshd:1": {
-            "port": 2286
-        }
+        "ghcr.io/devcontainers/features/sshd:1": {}
     },
     "customizations": {
         "vscode": {
@@ -47,5 +47,5 @@
         "--device-cgroup-rule=c 188:* rwm",
         "--mount", "type=bind,src=/dev,dst=/dev,bind-propagation=rslave"
     ],
-    "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && sudo npm install -g @anthropic-ai/claude-code && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && . /opt/esp-idf/export.sh"
+    "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && curl -fsSL https://claude.ai/install.sh | bash && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && echo 'cd /workspaces/OCPP-Server' >> ~/.bashrc && . /opt/esp-idf/export.sh"
 }

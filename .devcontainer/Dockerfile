@@ -15,7 +15,7 @@ RUN rm -rf /home/*/.oh-my-zsh /root/.oh-my-zsh && \
 # Rename existing vscode user to dev (base image has vscode with UID 1000)
 RUN usermod -l $USERNAME -d /home/$USERNAME -m vscode && \
     groupmod -n $USERNAME vscode && \
-    echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME && \
+    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
 # Install build dependencies
@@ -38,11 +38,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-venv \
     udev \
     usbutils \
+    usbip \
     minicom \
     screen \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js LTS via NodeSource
+# Install Node.js LTS via NodeSource (needed for claude-code)
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*

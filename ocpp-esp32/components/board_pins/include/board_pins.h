@@ -2,16 +2,11 @@
 
 #include "soc/gpio_num.h"
 
-/* SPI Ethernet (W5500) */
-#define PIN_ETH_MISO    GPIO_NUM_19
-#define PIN_ETH_MOSI    GPIO_NUM_23
-#define PIN_ETH_SCK     GPIO_NUM_18
-#define PIN_ETH_CS      GPIO_NUM_5
-#define PIN_ETH_INT     GPIO_NUM_4
-#define PIN_ETH_RST     GPIO_NUM_21
-
-#define ETH_SPI_HOST    SPI2_HOST
-#define ETH_SPI_CLOCK_MHZ  20
+/* WT32-ETH01 v1.4 - LAN8720 RMII Ethernet */
+#define PIN_ETH_MDC     GPIO_NUM_23
+#define PIN_ETH_MDIO    GPIO_NUM_18
+#define PIN_ETH_PWR     GPIO_NUM_16   /* Oscillator enable (active high) */
+#define ETH_PHY_ADDR    1
 
 /* User Input */
 #define PIN_BTN_CONFIG  GPIO_NUM_0

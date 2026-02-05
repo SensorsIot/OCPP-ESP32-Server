@@ -151,12 +151,21 @@ static void handle_command(const char *topic, const char *data, int data_len)
             int watts = (int)power_w->valuedouble;
             ESP_LOGI(TAG, "Power limit command: %dW", watts);
 
+            const ocpp_session_t *sess = ocpp_server_get_session();
+
+            /* If power > 0 but no active transaction, start one first */
+            if (watts > 0 && !sess->active) {
+                ESP_LOGI(TAG, "No active transaction, starting one for power limit");
+                ocpp_send_remote_start(1, "ENERGY_MANAGER");
+                /* Profile will be applied after transaction starts via TxDefaultProfile */
+            }
+
             /* Automatic phase switching based on power threshold (FSD 4.10.8) */
             /* < 4100W = 1-phase, >= 4100W = 3-phase */
             phase_mode_t current = phase_control_get_mode();
             phase_mode_t target = (watts < 4100) ? PHASE_MODE_1 : PHASE_MODE_3;
 
-            if (target != current) {
+            if (target != current && watts > 0) {
                 ESP_LOGI(TAG, "Auto phase switch: %s -> %s (power=%dW)",
                          current == PHASE_MODE_1 ? "1-phase" : "3-phase",
                          target == PHASE_MODE_1 ? "1-phase" : "3-phase",

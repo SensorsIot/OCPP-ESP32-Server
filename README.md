@@ -13,24 +13,33 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 ## 🏗️ Architecture
 
 ```
-┌─────────────┐    Ethernet     ┌──────────────┐     WiFi      ┌──────────────┐
-│   Wallbox   │◄───────────────│  ESP32 OCPP  │◄────────────►│ MQTT Broker  │
-│  (Charger)  │  WebSocket/OCPP │    Server    │    MQTT       │              │
-└─────────────┘                 └──────────────┘               └──────┬───────┘
-                                       │                              │
-                                       │                              ▼
-                                ┌──────────────┐              ┌──────────────┐
-                                │Captive Portal│              │   Energy     │
-                                │  (Config UI) │              │   Manager    │
-                                └──────────────┘              └──────────────┘
+                                                    ┌──────────────┐
+                                    (Future)        │ MQTT Broker  │
+                               ┌ ─ ─WiFi STA─ ─ ─ ─►│              │
+                               │                    └──────┬───────┘
+┌─────────────┐    Ethernet    │ ┌──────────────┐         │
+│   Wallbox   │◄──────────────┼──│ WT32-ETH01   │         ▼
+│  (Charger)  │  WebSocket/OCPP  │ OCPP Server  │  ┌──────────────┐
+└─────────────┘   (LAN8720)   │  └──────────────┘  │   Energy     │
+                              │         │          │   Manager    │
+                              │    WiFi AP         └──────────────┘
+                              │  (config mode)
+                              │  ┌──────────────┐
+                              └─►│Captive Portal│
+                                 │  (Config UI) │
+                                 └──────────────┘
 ```
 
-**Dual-network design:**
+**Network modes:**
+| Mode | Interfaces | When |
+|------|------------|------|
+| **Normal** | 🔌 Ethernet only | `wifi_ssid` configured |
+| **Config** | 📡 WiFi AP + Captive Portal | `wifi_ssid` empty or config button held |
+
+**Planned (future):**
 | Interface | Purpose | Protocol |
 |-----------|---------|----------|
-| 🔌 Ethernet (W5500) | Isolated wallbox connection | OCPP 1.6J over WebSocket |
 | 📶 WiFi STA | Home/site network | MQTT to energy manager |
-| 📡 WiFi AP | Configuration portal | HTTP captive portal |
 
 ---
 
@@ -81,13 +90,23 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 
 ## 🔧 Hardware
 
-| Component | Specification |
-|-----------|---------------|
-| 🧠 MCU | ESP32-WROOM-32 or ESP32-S3 |
-| 🔌 Ethernet | W5500 SPI module |
-| 💾 Flash | 8MB recommended (OTA dual partition) |
-| ⚡ Phase Relay | GPIO 25 (single relay for L2+L3, L1 always connected) |
-| 📍 Feedback | GPIO 34 (phase sense input) |
+### Supported Boards
+
+| Board | Ethernet | Notes |
+|-------|----------|-------|
+| **WT32-ETH01** | LAN8720 RMII | Recommended - integrated Ethernet |
+| ESP32 + W5500 | W5500 SPI | External module required |
+
+### Pin Configuration (WT32-ETH01)
+
+| Function | GPIO | Description |
+|----------|------|-------------|
+| 🔌 ETH MDC | 23 | Ethernet clock |
+| 🔌 ETH MDIO | 18 | Ethernet data |
+| 🔌 ETH Power | 16 | PHY power enable |
+| ⚡ Phase Relay | 25 | Single relay for L2+L3 |
+| 📍 Phase Sense | 34 | Phase feedback input |
+| 🔘 Config Button | 0 | Enter config mode |
 
 ---
 
@@ -108,8 +127,8 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 | 🧪 Test Scaffold | Simulator directory structure | ✅ Complete |
 | 🔧 Phase 1 | Core infrastructure (ETH, WiFi, NVS, GPIO, Console) | ✅ Complete |
 | 🌐 Phase 2 | Captive portal & configuration | ✅ Complete |
+| ⚡ Phase 4 | OCPP core (WebSocket server, BootNotification, Heartbeat) | ✅ Complete |
 | 🔄 Phase 3 | OTA updates | ⬜ Planned |
-| ⚡ Phase 4 | OCPP core (WebSocket, messages) | ⬜ Planned |
 | 🔋 Phase 5 | Transactions & metering | ⬜ Planned |
 | 📡 Phase 6 | MQTT bridge | ⬜ Planned |
 | 🔀 Phase 7 | Phase switching | ⬜ Planned |
@@ -132,7 +151,30 @@ cd ocpp-esp32
 source /path/to/esp-idf/export.sh
 idf.py set-target esp32
 idf.py build
+```
+
+### Flash via Local Serial
+
+```bash
 idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+### Flash via RFC2217 (Remote Serial)
+
+For remote flashing via Raspberry Pi with RFC2217 portal:
+
+```bash
+# Check available devices
+curl http://PI_IP:8080/api/discover
+
+# Start RFC2217 servers
+curl -X POST http://PI_IP:8080/api/start-all
+
+# Flash (use 921600 baud for faster uploads)
+idf.py -p 'rfc2217://PI_IP:4001?ign_set_control' -b 921600 flash
+
+# Monitor
+idf.py -p 'rfc2217://PI_IP:4001?ign_set_control' monitor
 ```
 
 ### Serial Console

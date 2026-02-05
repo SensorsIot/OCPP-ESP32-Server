@@ -9,23 +9,24 @@
 #   Simulator --MQTT-------> MQTT Broker          (energy manager)
 
 wallbox:
-  charge_point_id: "CP001"
+  charge_point_id: "Walpurga"
   vendor: "TestVendor"
   model: "SimulatorV1"
   serial_number: "SIM001"
   firmware_version: "1.0.0"
   max_current_a: 32
   num_connectors: 1
+  phase_mode: "3-phase"    # "1-phase" or "3-phase"
+  authorize_required: true
+  auto_plug: false
 
   # WebSocket connection to ESP32 OCPP server
-  # In test mode: use the ESP32 WiFi IP (same network as simulator)
-  # In production: would use Ethernet IP 192.168.4.1
-  ocpp_server: "ws://192.168.1.50:9000/ocpp/CP001"
+  ocpp_server: "ws://192.168.0.105:8887/ocpp/Walpurga"
   heartbeat_interval_sec: 60
   reconnect_delay_sec: 5
 
 mqtt:
-  broker: "192.168.1.100"
+  broker: "192.168.0.203"
   port: 1883
   username: ""
   password: ""
@@ -53,3 +54,8 @@ logging:
   level: "INFO"
   file: "logs/simulator.log"
   console: true
+
+web_ui:
+  host: "0.0.0.0"
+  port: 8080
+  enabled: true

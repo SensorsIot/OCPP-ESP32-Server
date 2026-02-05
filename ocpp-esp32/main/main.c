@@ -54,13 +54,10 @@ static void start_normal_mode(void)
 
     ESP_LOGI(TAG, "Starting in NORMAL mode");
 
-    /* Ethernet for wallbox OCPP */
+    /* Ethernet for wallbox OCPP (WiFi disabled to save power) */
     ESP_ERROR_CHECK(ethernet_manager_init());
 
-    /* WiFi STA for MQTT */
-    ESP_ERROR_CHECK(wifi_manager_init(WIFI_OP_STA));
-
-    /* NTP time sync over WiFi */
+    /* NTP time sync over Ethernet */
     init_ntp();
 
     /* OCPP WebSocket server (listens on all interfaces in test mode,

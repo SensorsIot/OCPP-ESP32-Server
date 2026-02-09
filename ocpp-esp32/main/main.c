@@ -52,23 +52,26 @@ static void start_normal_mode(void)
 {
     const config_t *cfg = config_get();
 
-    ESP_LOGI(TAG, "Starting in NORMAL mode");
+    ESP_LOGI(TAG, "Starting in NORMAL mode (test_mode=%s)",
+             cfg->test_mode ? "ON" : "OFF");
 
-    /* Ethernet for wallbox OCPP (WiFi disabled to save power) */
+    /* Ethernet — always on (OCPP + MQTT in production) */
     ESP_ERROR_CHECK(ethernet_manager_init());
 
-    /* NTP time sync over Ethernet */
+    /* WiFi STA — only in test mode (MQTT over WiFi to tester AP) */
+    if (cfg->test_mode && cfg->wifi_ssid[0] != '\0') {
+        ESP_LOGI(TAG, "Test mode: starting WiFi STA for MQTT");
+        ESP_ERROR_CHECK(wifi_manager_init(WIFI_OP_STA));
+    }
+
+    /* NTP time sync */
     init_ntp();
 
-    /* OCPP WebSocket server (listens on all interfaces in test mode,
-       otherwise primarily on Ethernet) */
+    /* OCPP WebSocket server */
     ESP_ERROR_CHECK(ocpp_server_start());
 
-    /* MQTT client (starts when WiFi connects) */
+    /* MQTT client — over Ethernet (production) or WiFi (test mode) */
     if (cfg->mqtt_host[0] != '\0') {
-        /* Delay MQTT start slightly to allow WiFi to connect */
-        ESP_LOGI(TAG, "MQTT will start after WiFi connects");
-        /* mqtt_manager_start() is safe to call — it handles no-connection gracefully */
         mqtt_manager_start();
     }
 
@@ -96,11 +99,11 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* 5. Decide boot mode based on WiFi config */
+    /* 5. Decide boot mode based on essential config */
     const config_t *cfg = config_get();
 
-    if (cfg->wifi_ssid[0] == '\0') {
-        /* No WiFi configured → Config mode (AP + captive portal) */
+    if (cfg->mqtt_host[0] == '\0') {
+        /* No MQTT broker configured → Config mode (AP + captive portal) */
         start_config_mode();
     } else {
         /* Normal mode: full stack */

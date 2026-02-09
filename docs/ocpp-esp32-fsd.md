@@ -4,10 +4,10 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.3 |
+| Version | 1.4 |
 | Status | Draft |
 | Created | 2026-01-25 |
-| Updated | 2026-01-25 |
+| Updated | 2026-02-09 |
 
 ## 1. Overview
 
@@ -112,10 +112,9 @@ Network Separation:
 | ETH_INT | 4 | Interrupt (optional) |
 | ETH_RST | 21 | Reset (optional) |
 | **User Input** |||
-| BTN_CONFIG | 0 | Boot button (hold for config mode) |
+| BTN_CONFIG | 14 | Config button (hold 5s for captive portal; not a strapping pin) |
 | **Phase Switching** |||
 | RELAY_PHASE23 | 25 | L2+L3 enable relay (NO; L1 always connected) |
-| PHASE_SENSE | 34 | Phase configuration feedback (input) |
 
 ### 2.5 Flash Partition Layout (OTA Support)
 
@@ -219,7 +218,7 @@ Network Separation:
                                │
                                ▼
                     ┌─────────────────────┐
-           ┌───────│  Check Config Valid  │───────┐
+           ┌───────│ MQTT Host Configured?│───────┐
            │       └─────────────────────┘       │
            │ No                                   │ Yes
            ▼                                      ▼
@@ -235,12 +234,12 @@ Network Separation:
            └──────────────────────────────────────┘
 ```
 
-| Mode | WiFi | Ethernet | OCPP | MQTT | Portal | OTA |
-|------|------|----------|------|------|--------|-----|
-| Config | AP | Inactive | No | No | Yes | Yes |
-| Normal | STA | Active | ETH only | Yes | No | Yes |
-| Test | STA | Optional | ETH + WiFi | Yes | No | Yes |
-| Fallback | AP+STA | Active | ETH only | No | Yes | Yes |
+| Mode | WiFi | Ethernet | OCPP | MQTT via | Portal | OTA |
+|------|------|----------|------|----------|--------|-----|
+| Config | AP | Inactive | No | N/A | Yes | Yes |
+| Normal | Off | Active | ETH only | Ethernet | No | Yes |
+| Test | STA | Active | ETH + WiFi | WiFi | No | Yes |
+| Fallback | AP+STA | Active | ETH only | Ethernet | Yes | Yes |
 
 ## 4. Functional Requirements
 
@@ -261,7 +260,7 @@ Network Separation:
 - **WIFI-003**: System SHALL automatically reconnect on WiFi disconnect
 - **WIFI-004**: System SHALL log WiFi connection status changes
 - **WIFI-005**: System SHALL support WPA2/WPA3 authentication
-- **WIFI-006**: MQTT client SHALL only use WiFi interface
+- **WIFI-006**: In test mode, MQTT client SHALL use WiFi interface; in production, MQTT SHALL use Ethernet
 - **WIFI-007**: System SHALL sync time via NTP over WiFi
 
 #### 4.1.3 WiFi Access Point Mode (Configuration)
@@ -801,7 +800,7 @@ The wallbox always reports power as if operating in 3-phase mode. The OCPP serve
 - **PHASE-006**: System SHALL verify wallbox status is "Available" before switching
 - **PHASE-007**: System SHALL wait for configurable delay after stop before switching
 - **PHASE-008**: System SHALL start new transaction after successful switch
-- **PHASE-009**: System SHALL verify phase state via feedback input
+- **PHASE-009**: System SHALL verify phase state via wallbox MeterValues (L2/L3 voltage = 0 V confirms 1-phase; non-zero confirms 3-phase)
 - **PHASE-010**: System SHALL report phase configuration to MQTT
 
 #### 4.10.4 Phase Switching Sequence (CRITICAL)
@@ -839,8 +838,10 @@ The phase switching process MUST follow this exact sequence:
 │     └─► 3-phase: RELAY_PHASE23=ON  (L2+L3 connected)                   │
 │                                                                          │
 │  6. VERIFY SWITCH                                                       │
-│     └─► Read: PHASE_SENSE feedback input                                │
-│     └─► Compare: expected vs actual state                               │
+│     └─► Wait: for wallbox StatusNotification after relay change         │
+│     └─► Read: MeterValues from wallbox — check L2/L3 voltage           │
+│     └─► 1-phase: L2 and L3 voltage must be 0 V                         │
+│     └─► 3-phase: L2 and L3 voltage must be non-zero                    │
 │     └─► On mismatch: report error, do NOT restart                       │
 │                                                                          │
 │  7. RESTART TRANSACTION (if was charging)                               │
@@ -894,12 +895,12 @@ The phase switching process MUST follow this exact sequence:
 │     Timer Done                                                 │       │
 │           │                                                    │       │
 │           ▼                                                    │       │
-│    ┌──────────────┐       Feedback Mismatch                   │       │
+│    ┌──────────────┐       Voltage Mismatch                    │       │
 │    │  SWITCHING   │─────────────────────────────────►  ERROR ──┤       │
-│    │   (GPIO)     │                                            │       │
+│    │  (GPIO+WB)   │                                            │       │
 │    └──────┬───────┘                                            │       │
 │           │                                                    │       │
-│     Verify OK                                                  │       │
+│     WB Voltage OK                                              │       │
 │           │                                                    │       │
 │           ▼                                                    │       │
 │    ┌──────────────┐         Timeout                           │       │
@@ -1002,7 +1003,7 @@ Topic: `ocpp/{charger_id}/command/limit`
 - **SAFETY-002**: Transaction MUST be stopped before any phase switching
 - **SAFETY-003**: System SHALL wait for "Available" status before switching
 - **SAFETY-004**: System SHALL apply safety delay after stop before switching
-- **SAFETY-005**: System SHALL verify relay feedback matches commanded state
+- **SAFETY-005**: System SHALL verify phase switch via wallbox MeterValues (L2/L3 voltage must match expected state)
 - **SAFETY-006**: On ANY error, system SHALL remain in current phase configuration
 - **SAFETY-007**: System SHALL report all switching errors to MQTT
 - **SAFETY-008**: If switch fails, system SHALL NOT restart transaction automatically
@@ -1135,7 +1136,7 @@ I (12346) OCPP: TX StatusNotification.conf: Accepted
 - Phase state machine
 - MQTT phase commands
 - Safety interlocks
-- Feedback verification
+- Wallbox voltage verification (L2/L3 via MeterValues)
 
 ### Phase 8: Smart Charging
 - Charging profile support
@@ -1376,16 +1377,16 @@ A Python-based test simulator provides automated testing:
 
 **Pass Criteria**: Safe abort, no relay activity, error reported.
 
-#### 7.4.4 EC-103: Phase Switch Relay Feedback Mismatch
+#### 7.4.4 EC-103: Phase Switch Voltage Verification Failure
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Initiate phase switch | Normal sequence to SWITCHING |
-| 2 | Relays commanded | GPIO set |
-| 3 | Feedback doesn't match | PHASE_SENSE incorrect |
-| 4 | Mismatch detected | Error state entered |
+| 1 | Initiate phase switch (3→1) | Normal sequence to SWITCHING |
+| 2 | Relay commanded OFF (L2+L3 disconnected) | GPIO 25 = LOW |
+| 3 | Wallbox MeterValues still show voltage on L2/L3 | Relay stuck or wiring fault |
+| 4 | Voltage mismatch detected | Error state entered |
 | 5 | Transaction NOT restarted | Safety interlock |
-| 6 | Error published to MQTT | Reason: feedback_mismatch |
+| 6 | Error published to MQTT | Reason: voltage_mismatch |
 
 **Pass Criteria**: No restart on failure, error clearly reported.
 
@@ -1641,3 +1642,10 @@ Available → Preparing → Charging → SuspendedEV/SuspendedEVSE → Finishing
 | 1.3 | 2026-01-30 | - | Removed all LED hardware (no physical LEDs); status via log/MQTT only |
 | | | | Simplified phase switching: single relay for L2+L3, L1 always connected |
 | | | | Reduced pin count: removed 4 LED GPIOs and 2 relay GPIOs |
+| 1.4 | 2026-02-09 | - | Removed PHASE_SENSE (GPIO 34) — relay has no feedback contact |
+| | | | Phase verification now uses wallbox MeterValues (L2/L3 voltage) |
+| | | | Updated PHASE-009, SAFETY-005, switching sequence, state machine, EC-103 |
+| | | | Config button moved from GPIO 0 (strapping pin) to GPIO 14 |
+| | | | Boot decision changed from wifi_ssid to mqtt_host |
+| | | | MQTT transport: Ethernet (production) or WiFi (test mode) |
+| | | | WIFI-006 updated for dual transport modes |

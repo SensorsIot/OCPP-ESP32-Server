@@ -37,7 +37,7 @@ The ESP32 OCPP Server uses a dual-network architecture:
 | WIFI-003 | System SHALL automatically reconnect on WiFi disconnect | Must |
 | WIFI-004 | System SHALL log WiFi connection status changes | Should |
 | WIFI-005 | System SHALL support WPA2/WPA3 authentication | Must |
-| WIFI-006 | MQTT client SHALL only use WiFi interface | Must |
+| WIFI-006 | In test mode, MQTT client SHALL use WiFi interface; in production, MQTT SHALL use Ethernet | Must |
 | WIFI-007 | System SHALL sync time via NTP over WiFi | Should |
 
 ### 2.2 WiFi Access Point Mode (Configuration)

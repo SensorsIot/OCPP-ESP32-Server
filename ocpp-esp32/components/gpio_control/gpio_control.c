@@ -54,16 +54,6 @@ esp_err_t gpio_control_init(gpio_config_btn_cb_t config_btn_cb)
     gpio_set_level(PIN_RELAY_PHASE23, 0);
     s_phase_mode = PHASE_MODE_1;
 
-    /* Phase sense input (GPIO 34 is input-only) */
-    gpio_config_t sense_io = {
-        .pin_bit_mask = 1ULL << PIN_PHASE_SENSE,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&sense_io));
-
     /* Config button input (GPIO 0 has external pull-up on most dev boards) */
     gpio_config_t btn_io = {
         .pin_bit_mask = 1ULL << PIN_BTN_CONFIG,
@@ -105,7 +95,3 @@ phase_mode_t gpio_get_phase_mode(void)
     return s_phase_mode;
 }
 
-bool gpio_read_phase_sense(void)
-{
-    return gpio_get_level(PIN_PHASE_SENSE) != 0;
-}

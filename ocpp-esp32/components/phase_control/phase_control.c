@@ -34,6 +34,7 @@ static esp_timer_handle_t s_timer;
 static char s_saved_id_tag[21];
 static int s_saved_transaction_id;
 static int64_t s_switch_start_time;
+static bool s_verify_pending;  /* true after relay switch until MeterValues confirm */
 
 static void enter_state(phase_switch_state_t new_state)
 {
@@ -84,22 +85,12 @@ static void phase_timer_cb(void *arg)
             /* Perform the actual relay switch */
             enter_state(PHASE_SW_SWITCHING);
             gpio_set_phase_mode(s_target_mode);
+            s_verify_pending = true;
 
-            /* Verify feedback */
-            bool feedback_ok;
-            if (s_target_mode == PHASE_MODE_3) {
-                feedback_ok = gpio_read_phase_sense();
-            } else {
-                feedback_ok = !gpio_read_phase_sense();
-            }
-
-            if (!feedback_ok) {
-                ESP_LOGE(TAG, "Phase feedback mismatch!");
-                phase_switch_complete(false, "feedback_mismatch");
-                return;
-            }
-
-            /* If there was an active transaction, restart it */
+            /* If there was an active transaction, restart it.
+             * Phase verification happens asynchronously via MeterValues —
+             * once charging resumes, the wallbox reports per-phase voltage
+             * and phase_control_on_meter_values() checks L2/L3. */
             if (s_saved_id_tag[0]) {
                 enter_state(PHASE_SW_STARTING);
                 ocpp_send_remote_start(1, s_saved_id_tag);
@@ -120,6 +111,45 @@ static void phase_timer_cb(void *arg)
     default:
         break;
     }
+}
+
+/* Voltage threshold — below this, phase is considered disconnected */
+#define VOLTAGE_PRESENT_THRESHOLD  50.0f   /* volts */
+
+/* OCPP callback: meter values — verify phase voltage after a switch */
+static void on_ocpp_meter(int connector_id, int transaction_id,
+                           const cJSON *values)
+{
+    if (!s_verify_pending) return;
+
+    const ocpp_session_t *sess = ocpp_server_get_session();
+
+    /* Skip if wallbox doesn't report per-phase voltage yet */
+    if (sess->voltage_l2 == 0.0f && sess->voltage_l3 == 0.0f &&
+        sess->voltage_l1 == 0.0f) {
+        return;
+    }
+
+    bool l2_present = sess->voltage_l2 > VOLTAGE_PRESENT_THRESHOLD;
+    bool l3_present = sess->voltage_l3 > VOLTAGE_PRESENT_THRESHOLD;
+    phase_mode_t current = gpio_get_phase_mode();
+
+    if (current == PHASE_MODE_1 && (l2_present || l3_present)) {
+        ESP_LOGE(TAG, "Voltage mismatch! 1-phase mode but L2=%.0fV L3=%.0fV",
+                 sess->voltage_l2, sess->voltage_l3);
+        mqtt_publish_phase_result(false,
+            "1-phase", "1-phase", 0, "voltage_mismatch");
+    } else if (current == PHASE_MODE_3 && (!l2_present || !l3_present)) {
+        ESP_LOGE(TAG, "Voltage mismatch! 3-phase mode but L2=%.0fV L3=%.0fV",
+                 sess->voltage_l2, sess->voltage_l3);
+        mqtt_publish_phase_result(false,
+            "3-phase", "3-phase", 0, "voltage_mismatch");
+    } else {
+        ESP_LOGI(TAG, "Phase voltage verified OK (L2=%.0fV L3=%.0fV)",
+                 sess->voltage_l2, sess->voltage_l3);
+    }
+
+    s_verify_pending = false;
 }
 
 /* OCPP callback: status change */
@@ -149,6 +179,7 @@ esp_err_t phase_control_init(void)
     /* Register for OCPP notifications */
     ocpp_server_set_status_cb(on_ocpp_status);
     ocpp_server_set_session_cb(on_ocpp_session);
+    ocpp_server_set_meter_cb(on_ocpp_meter);
 
     ESP_LOGI(TAG, "Phase control initialised (mode=%s)",
              gpio_get_phase_mode() == PHASE_MODE_3 ? "3-phase" : "1-phase");

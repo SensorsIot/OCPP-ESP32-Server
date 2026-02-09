@@ -156,12 +156,25 @@ void ocpp_session_on_meter_values(int connector_id, int transaction_id,
                     cJSON *value = cJSON_GetObjectItem(sv, "value");
                     if (measurand && value && cJSON_IsString(value)) {
                         const char *m = measurand->valuestring;
+                        cJSON *phase = cJSON_GetObjectItem(sv, "phase");
+                        const char *ph = (phase && cJSON_IsString(phase)) ? phase->valuestring : NULL;
                         if (strcmp(m, "Energy.Active.Import.Register") == 0) {
                             s_session.meter_current = atoi(value->valuestring);
                         } else if (strcmp(m, "Power.Active.Import") == 0) {
                             s_session.power_w = atoi(value->valuestring);
                         } else if (strcmp(m, "Current.Import") == 0) {
                             s_session.current_a = (float)atof(value->valuestring);
+                        } else if (strcmp(m, "Voltage") == 0) {
+                            float v = (float)atof(value->valuestring);
+                            if (ph && strcmp(ph, "L1") == 0) {
+                                s_session.voltage_l1 = v;
+                            } else if (ph && strcmp(ph, "L2") == 0) {
+                                s_session.voltage_l2 = v;
+                            } else if (ph && strcmp(ph, "L3") == 0) {
+                                s_session.voltage_l3 = v;
+                            } else if (!ph) {
+                                s_session.voltage_l1 = v;
+                            }
                         }
                     }
                 }

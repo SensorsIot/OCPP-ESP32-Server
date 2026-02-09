@@ -14,8 +14,7 @@ typedef enum {
 typedef void (*gpio_config_btn_cb_t)(void);
 
 /**
- * Initialise relay outputs (default: 1-phase), phase sense input,
- * and config button polling timer.
+ * Initialise relay output (default: 1-phase) and config button polling timer.
  */
 esp_err_t gpio_control_init(gpio_config_btn_cb_t config_btn_cb);
 
@@ -29,9 +28,3 @@ esp_err_t gpio_set_phase_mode(phase_mode_t mode);
  * Read current relay output state.
  */
 phase_mode_t gpio_get_phase_mode(void);
-
-/**
- * Read the PHASE_SENSE feedback input.
- * Returns true if feedback indicates 3-phase connected.
- */
-bool gpio_read_phase_sense(void);

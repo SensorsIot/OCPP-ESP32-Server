@@ -8,11 +8,8 @@
 #define PIN_ETH_PWR     GPIO_NUM_16   /* Oscillator enable (active high) */
 #define ETH_PHY_ADDR    1
 
-/* User Input */
-#define PIN_BTN_CONFIG  GPIO_NUM_0
+/* User Input (GPIO 14 — not a strapping pin, safe during reset) */
+#define PIN_BTN_CONFIG  GPIO_NUM_14
 
 /* Phase Switching Relay (single relay controls L2+L3 together; L1 always connected) */
 #define PIN_RELAY_PHASE23 GPIO_NUM_25
-
-/* Phase Sense Feedback (input-only GPIO) */
-#define PIN_PHASE_SENSE  GPIO_NUM_34

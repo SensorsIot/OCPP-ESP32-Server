@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Date** | 2026-02-10 |
 | **Author** | Claude |
 | **Status** | Draft |
@@ -47,13 +47,14 @@ The ESP32 OCPP Server bridges EV charging stations (wallboxes) to an MQTT-based 
 | Setup | TC-000 – TC-001 | 2 | 2 | 0 |
 | Captive Portal | CP-100 – CP-103 | 4 | 4 | 0 |
 | MQTT Transport | MT-100 – MT-103 | 4 | 4 | 0 |
+| MQTT Resilience | MR-100 – MR-101 | 2 | 2 | 0 |
 | Connection | TC-100 – TC-104 | 5 | 5 | 0 |
 | Charging | TC-110 – TC-113 | 4 | 4 | 0 |
 | Remote Commands | TC-120 – TC-123 | 4 | 4 | 0 |
 | Phase Switching | TC-130 – TC-134 | 5 | 5 | 0 |
 | Wallbox Emulator | WB-100 – WB-109 | 10 | 10 | 0 |
 | OTA Update | OTA-100 – OTA-103 | 4 | 3 | 1 |
-| Edge Cases | EC-100 – EC-115 | 16 | 12 | 4 |
+| Edge Cases | EC-100 – EC-115 | 14 | 10 | 4 |
 | Long Duration | LD-001 – LD-004 | 4 | 4 | 0 |
 | **Total** | | **62** | **57** | **5** |
 
@@ -101,7 +102,7 @@ at 192.168.0.203:1883.
 
 ### 2.2 Infrastructure Rules
 
-- **MQTT Broker (Pi)**: Mosquitto runs on the Pi (192.168.4.1). Always running. Only EC-106 may restart it.
+- **MQTT Broker (Pi)**: Mosquitto runs on the Pi (192.168.4.1). Always running. Only MR-101 may restart it.
 - **MQTT Broker (home)**: 192.168.0.203. Only used for production-mode tests (MT-100).
 - **Serial Portal**: always running at 192.168.0.87. No test may restart it.
 - **WiFi Tester AP**: started/stopped by tests as needed via `wt.ap_start()`/`wt.ap_stop()`.
@@ -555,6 +556,56 @@ These tests follow captive portal because they depend on a configured DUT.
 **Pass Criteria:** Missing WiFi SSID in test mode falls back to Ethernet MQTT gracefully.
 
 **Automation:** `pytest tests/test_mqtt_transport.py::test_test_mode_no_ssid -v`
+
+---
+
+## 5.5 MQTT Resilience Tests
+
+Tests MQTT error handling and recovery **before** the wallbox emulator is connected.
+These run on the Pi's WiFi AP (192.168.4.x subnet) — the Pi controls both the AP
+and the Mosquitto broker, so broker restarts are isolated from the home network.
+
+#### MR-100: Malformed MQTT Command
+
+**Precondition:**
+- DUT subscribed to command topics via Pi broker (192.168.4.1:1883)
+- MQTT connected over WiFi AP
+- No wallbox connected (DUT handles commands independently)
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Publish invalid JSON to `command/start` | Message ignored |
+| 2 | Publish `{"power_w": "invalid"}` to `command/limit` | Error logged |
+| 3 | Publish empty message to `command/stop` | Treated as valid (empty = stop all) |
+| 4 | Verify DUT operational | No crash, heap stable |
+
+**Pass Criteria:** Invalid MQTT commands don't crash DUT. No wallbox connection required.
+
+**Automation:** `pytest tests/test_mqtt_resilience.py::test_malformed_mqtt -v`
+
+---
+
+#### MR-101: MQTT Broker Restart
+
+**Precondition:**
+- DUT connected to MQTT via Pi WiFi AP (broker at 192.168.4.1:1883)
+- Active message publishing (status topic)
+- No wallbox connected
+- Baseline reconnect count: `R_before`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Stop Mosquitto on Pi: `wt.ssh_exec("sudo systemctl stop mosquitto")` | Connection lost |
+| 2 | Verify DUT detects disconnect | Serial log: "MQTT disconnected" |
+| 3 | Wait 10 seconds | DUT retrying |
+| 4 | Restart Mosquitto: `wt.ssh_exec("sudo systemctl start mosquitto")` | Broker available |
+| 5 | Verify DUT reconnects | Within 30 seconds |
+| 6 | Verify publishing resumes | Status messages flowing |
+| 7 | Check reconnect count | `R_before + 1` |
+
+**Pass Criteria:** Automatic MQTT reconnection after broker restart on the Pi's isolated network.
+
+**Automation:** `pytest tests/test_mqtt_resilience.py::test_mqtt_broker_restart -v`
 
 ---
 
@@ -1497,48 +1548,6 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 ---
 
-#### EC-105: Malformed MQTT Command
-
-**Precondition:**
-- DUT subscribed to command topics
-- MQTT connected
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Publish invalid JSON to `command/start` | Message ignored |
-| 2 | Publish `{"power_w": "invalid"}` to `command/limit` | Error logged |
-| 3 | Publish empty message to `command/stop` | Treated as valid (empty = stop all) |
-| 4 | Verify DUT operational | No crash |
-
-**Pass Criteria:** Invalid MQTT commands don't crash DUT.
-
-**Automation:** `pytest tests/test_errors.py::test_malformed_mqtt -v`
-
----
-
-#### EC-106: MQTT Broker Restart
-
-**Precondition:**
-- DUT connected to MQTT
-- Active message publishing
-- Baseline reconnect count: `R_before`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Stop MQTT broker | Connection lost |
-| 2 | Verify DUT detects disconnect | Serial log: "MQTT disconnected" |
-| 3 | Wait 10 seconds | DUT retrying |
-| 4 | Restart MQTT broker | Broker available |
-| 5 | Verify DUT reconnects | Within 30 seconds |
-| 6 | Verify publishing resumes | Status messages flowing |
-| 7 | Check reconnect count | `R_before + 1` |
-
-**Pass Criteria:** Automatic MQTT reconnection after broker restart.
-
-**Automation:** `pytest tests/test_errors.py::test_mqtt_broker_restart -v`
-
----
-
 #### EC-107: Maximum Message Size
 
 **Precondition:**
@@ -1728,11 +1737,11 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Category | Covered By | Description |
 |----------|-----------|-------------|
-| Malformed input | EC-104, EC-105 | Invalid JSON, wrong types |
+| Malformed input | EC-104, MR-100 | Invalid JSON, wrong types |
 | Oversized input | EC-107 | Exceeds 4KB message limit |
-| Empty input | EC-105 | Empty MQTT commands |
+| Empty input | MR-100 | Empty MQTT commands |
 | Concurrent operations | EC-108 | Parallel OCPP + MQTT |
-| Disconnect/reconnect | EC-100, EC-101, EC-106 | Network drops |
+| Disconnect/reconnect | EC-100, EC-101, MR-101 | Network drops |
 | Rapid-fire | EC-103 | Burst of commands |
 | Timeout | EC-102 | Phase switch timeout |
 | Resource exhaustion | EC-115 | Memory pressure |
@@ -2018,14 +2027,15 @@ curl -s -X POST http://localhost:8080/api/authorize -H 'Content-Type: applicatio
 | 1 | Setup | 2 | No | Yes | 5 min |
 | 2 | Captive Portal | 4 | No | Yes | 15 min |
 | 3 | MQTT Transport | 4 | No | Yes | 10 min |
-| 4 | Connection | 5 | No | Yes | 10 min |
-| 5 | Charging | 4 | No | Yes | 15 min |
-| 6 | Remote Commands | 4 | No | Yes | 10 min |
-| 7 | Phase Switching | 5 | No | Yes | 20 min |
-| 8 | Wallbox Emulator | 10 | No | Yes | 20 min |
-| 9 | OTA Update | 4 | 1 test | Yes | 15 min |
-| 10 | Edge Cases | 16 | 4 tests | Yes | 45 min |
-| 11 | Long Duration | 4 | No | Yes | 7+ days |
+| 4 | MQTT Resilience | 2 | No | Yes | 5 min |
+| 5 | Connection | 5 | No | Yes | 10 min |
+| 6 | Charging | 4 | No | Yes | 15 min |
+| 7 | Remote Commands | 4 | No | Yes | 10 min |
+| 8 | Phase Switching | 5 | No | Yes | 20 min |
+| 9 | Wallbox Emulator | 10 | No | Yes | 20 min |
+| 10 | OTA Update | 4 | 1 test | Yes | 15 min |
+| 11 | Edge Cases | 14 | 4 tests | Yes | 40 min |
+| 12 | Long Duration | 4 | No | Yes | 7+ days |
 
 ### Manual-Only Tests
 
@@ -2085,6 +2095,7 @@ wt.gpio_set(27, "z")    # Release
 | `tests/test_setup.py` | 2 | Flash, provision, clean state | pytest-asyncio |
 | `tests/test_captive_portal.py` | 4 | Captive portal | pytest-asyncio |
 | `tests/test_mqtt_transport.py` | 4 | MQTT transport mode | pytest-asyncio |
+| `tests/test_mqtt_resilience.py` | 2 | MQTT error handling and recovery | pytest-asyncio |
 | `tests/test_connection.py` | 5 | OCPP WebSocket handling | pytest-asyncio |
 | `tests/test_charging.py` | 4 | Transaction management | pytest-asyncio |
 | `tests/test_remote.py` | 4 | MQTT command handling | pytest-asyncio |
@@ -2093,7 +2104,7 @@ wt.gpio_set(27, "z")    # Release
 | `tests/test_metering.py` | 2 | MeterValues processing | pytest-asyncio |
 | `tests/test_wallbox_emulator.py` | 10 | Wallbox emulator integration | pytest-asyncio |
 | `tests/test_ota.py` | 3 | OTA update | pytest-asyncio |
-| `tests/test_errors.py` | 12 | Error handling | pytest-asyncio |
+| `tests/test_errors.py` | 10 | Error handling | pytest-asyncio |
 | `tests/test_long_duration.py` | 4 | Stability and endurance | pytest-asyncio |
 | **Total** | **62** | | |
 
@@ -2136,6 +2147,10 @@ MQTT TRANSPORT
   MT-101  Test Mode (WiFi)           [ PASS / FAIL / SKIP ]
   MT-102  Switch Prod→Test           [ PASS / FAIL / SKIP ]
   MT-103  Test Mode No SSID          [ PASS / FAIL / SKIP ]
+
+MQTT RESILIENCE (Pi WiFi AP — no wallbox needed)
+  MR-100  Malformed MQTT Command     [ PASS / FAIL / SKIP ]
+  MR-101  MQTT Broker Restart        [ PASS / FAIL / SKIP ]
 
 CONNECTION
   TC-100  WebSocket Connection       [ PASS / FAIL / SKIP ]
@@ -2187,8 +2202,6 @@ EDGE CASES
   EC-102  Phase Switch Timeout       [ PASS / FAIL / SKIP ]
   EC-103  Rapid Power Limits         [ PASS / FAIL / SKIP ]
   EC-104  Malformed OCPP             [ PASS / FAIL / SKIP ]
-  EC-105  Malformed MQTT             [ PASS / FAIL / SKIP ]
-  EC-106  MQTT Broker Restart        [ PASS / FAIL / SKIP ]
   EC-107  Max Message Size           [ PASS / FAIL / SKIP ]
   EC-108  Concurrent Traffic         [ PASS / FAIL / SKIP ]
   EC-109  Power Cycle (Manual)       [ PASS / FAIL / SKIP ]
@@ -2235,3 +2248,4 @@ Notes:
 | 1.1 | 2026-02-09 | Claude | Added GPIO boot sequencing for WT32-ETH01 (no DTR/CTS); updated flash/erase commands to use SLOT3 (port 4003) with --before=no_reset; added MQTT Transport tests (MT-100–MT-103); renumbered sections |
 | 1.2 | 2026-02-09 | Claude | Phase switching tests: added relay readback via Pi BCM 22, wallbox emulator phase sync, architecture diagram; TC-130–TC-134 fully automated (no manual tests); TC-133 simulates stuck relay via emulator mismatch |
 | 1.3 | 2026-02-10 | Claude | Added wallbox emulator integration tests (WB-100 to WB-109), emulator setup instructions (Section 2.8), emulator HTTP API reference, Python helper functions, updated existing tests with emulator observation notes, added emulator commands to Section 10 |
+| 1.4 | 2026-02-10 | Claude | Moved MQTT resilience tests (EC-105→MR-100, EC-106→MR-101) to Phase 4 before wallbox connection; runs on Pi WiFi AP for network isolation from home LAN |

@@ -1,5 +1,5 @@
 {
-    "name": "OCPP-Server ESP-IDF",
+    "name": "OCPP-ESP32-Server",
     "build": {
         "dockerfile": "Dockerfile",
         "context": "."
@@ -47,5 +47,5 @@
         "--device-cgroup-rule=c 188:* rwm",
         "--mount", "type=bind,src=/dev,dst=/dev,bind-propagation=rslave"
     ],
-    "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && curl -fsSL https://claude.ai/install.sh | bash && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && echo 'cd /workspaces/OCPP-Server' >> ~/.bashrc && . /opt/esp-idf/export.sh"
+    "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && curl -fsSL https://claude.ai/install.sh | bash && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && echo 'cd /workspaces/OCPP-ESP32-Server' >> ~/.bashrc && . /opt/esp-idf/export.sh"
 }

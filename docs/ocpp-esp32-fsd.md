@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.4 |
+| Version | 1.5 |
 | Status | Draft |
 | Created | 2026-01-25 |
 | Updated | 2026-02-09 |
@@ -100,21 +100,58 @@ Network Separation:
 - ESP32-WROOM-32
 - W5500 Ethernet module 
 
-### 2.4 Pin Assignments
+### 2.4 Pin Assignments (WT32-ETH01)
+
+#### Ethernet RMII (LAN8720 — hardwired, NOT available for GPIO)
+
+| GPIO | RMII Function |
+|------|--------------|
+| 0 | REF_CLK (50 MHz clock input; also strapping pin) |
+| 16 | OSC_EN (PHY oscillator enable, active high) |
+| 18 | MDIO (management data) |
+| 19 | TXD0 |
+| 21 | TX_EN |
+| 22 | TXD1 |
+| 23 | MDC (management clock) |
+| 25 | RXD0 |
+| 26 | RXD1 |
+| 27 | CRS_DV (carrier sense) |
+
+#### Application Pin Assignments
 
 | Function | GPIO | Notes |
 |----------|------|-------|
-| **SPI Ethernet (W5500)** |||
-| ETH_MISO | 19 | SPI MISO |
-| ETH_MOSI | 23 | SPI MOSI |
-| ETH_SCK | 18 | SPI Clock |
-| ETH_CS | 5 | Chip Select |
-| ETH_INT | 4 | Interrupt (optional) |
-| ETH_RST | 21 | Reset (optional) |
-| **User Input** |||
 | BTN_CONFIG | 14 | Config button (hold 5s for captive portal; not a strapping pin) |
-| **Phase Switching** |||
-| RELAY_PHASE23 | 25 | L2+L3 enable relay (NO; L1 always connected) |
+| RELAY_PHASE23 | 4 | L2+L3 enable relay (NO; L1 always connected) |
+
+#### All GPIOs on WT32-ETH01 Header
+
+| GPIO | Available | Notes |
+|------|-----------|-------|
+| 0 | No | Ethernet RMII CLK + strapping (boot mode) |
+| 1 | No | UART0 TX (serial console) |
+| 2 | Strapping | Must float/LOW at boot |
+| 3 | No | UART0 RX (serial console) |
+| **4** | **Relay** | Phase switching relay output |
+| 5 | Free | UART2 RX (repurposable) |
+| 12 | Strapping | Flash voltage select (LOW=3.3V, HIGH=1.8V) |
+| **14** | **Config btn** | Captive portal trigger |
+| 15 | Strapping | Debug log silenced if LOW at boot |
+| 17 | Free | UART2 TX (repurposable) |
+| 32 | Free | Labeled "CFG" on some board variants |
+| 33 | Free | Labeled "485_EN" on some board variants |
+| 35 | Free | Input-only, no internal pull |
+| 36 | Free | Input-only, no internal pull |
+| 39 | Free | Input-only, no internal pull |
+
+#### Test Wiring (Pi Serial Portal ↔ DUT)
+
+| Pi BCM | DUT Pin | Direction | Function |
+|--------|---------|-----------|----------|
+| 17 | EN | Pi → DUT | Reset (active LOW) |
+| 18 | GPIO 0 | Pi → DUT | Boot mode select (LOW = download) |
+| 27 | GPIO 14 | Pi → DUT | Config button (LOW = pressed) |
+| 22 | GPIO 4 | DUT → Pi | Relay state readback (LOW = 1-phase, HIGH = 3-phase) |
 
 ### 2.5 Flash Partition Layout (OTA Support)
 
@@ -1156,355 +1193,115 @@ I (12346) OCPP: TX StatusNotification.conf: Accepted
 ### 7.1 Test Environment
 
 #### 7.1.1 Test Simulator Architecture
-A Python-based test simulator provides automated testing:
+A Python-based test simulator provides automated testing. The Pi (Serial Portal +
+WiFi Tester) provides GPIO control, serial access, and WiFi AP for the DUT.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     OCPP Test Simulator (Python)                     │
+│                     Test Host (Python)                                │
 │                                                                      │
 │  ┌─────────────────────┐              ┌─────────────────────┐       │
 │  │  Wallbox Emulator   │              │    MQTT Client      │       │
 │  │                     │              │                     │       │
 │  │  - OCPP 1.6J Client │              │  - Publish commands │       │
 │  │  - WebSocket conn   │              │  - Subscribe status │       │
-│  │  - Simulates EV     │              │  - Phase control    │       │
-│  │  - Meter values     │              │  - Power limits     │       │
+│  │  - Phase-aware      │              │  - Phase control    │       │
+│  │    MeterValues      │              │  - Power limits     │       │
+│  │  - POST /api/phase  │              │                     │       │
+│  │    to sync mode     │              │                     │       │
 │  └──────────┬──────────┘              └──────────┬──────────┘       │
 │             │                                    │                   │
 │  ┌──────────┴────────────────────────────────────┴──────────┐       │
 │  │                    Test Scenarios                         │       │
 │  │  - Automated test sequences                              │       │
 │  │  - Pass/fail assertions                                  │       │
-│  │  - Report generation                                     │       │
+│  │  - WiFiTesterDriver for GPIO + serial                    │       │
+│  │  - Relay readback (BCM 22 ← GPIO 4)                     │       │
 │  └──────────────────────────────────────────────────────────┘       │
-└─────────────────────────────────────────────────────────────────────┘
-              │ WebSocket                          │ MQTT
-              │ (Ethernet)                         │ (WiFi)
-              ▼                                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      ESP32 OCPP Server (DUT)                         │
-└─────────────────────────────────────────────────────────────────────┘
+└──────────┬──────────────────┬────────────────────┬──────────────────┘
+           │ WebSocket        │ MQTT               │ WiFiTesterDriver
+           │ (Ethernet)       │ (WiFi)             │ (HTTP API)
+           ▼                  ▼                    ▼
+┌──────────────────────────────────┐    ┌─────────────────────────────┐
+│      ESP32 OCPP Server (DUT)     │    │   Pi (Serial Portal +       │
+│                                  │    │        WiFi Tester)          │
+│  GPIO 4 (relay) ──────wire──────────► │   BCM 22 (relay readback)   │
+│  GPIO 14 (config btn) ◄──wire──────── │   BCM 27 (config trigger)   │
+│  EN (reset) ◄──────────wire──────────│   BCM 17 (reset)            │
+│  GPIO 0 (boot mode) ◄──wire─────────│   BCM 18 (boot mode)        │
+│  Serial (UART) ◄────RFC2217─────────│   /dev/ttyUSB0              │
+│                                  │    │   MQTT broker (1883)        │
+│                                  │    │   WiFi AP (192.168.4.1)     │
+└──────────────────────────────────┘    └─────────────────────────────┘
 ```
+
+**Phase test coordination:** During phase switching tests, the test script polls
+Pi BCM 22 to detect DUT relay state changes, then calls the wallbox emulator's
+`POST /api/phase` endpoint to switch its MeterValues generation (L2/L3 current=0
+and voltage=0 in 1-phase mode). For TC-EC-103 (voltage mismatch), the test
+intentionally does NOT sync the emulator, simulating a stuck relay.
 
 #### 7.1.2 Test Tools
 
 | Tool | Purpose |
 |------|---------|
-| ocpp-test-wallbox | Python test harness (wallbox + MQTT) |
+| ocpp-test-wallbox | Wallbox emulator (OCPP client) + MQTT client + Web UI |
+| WiFiTesterDriver | Python driver for Pi Serial Portal / WiFi Tester (GPIO, serial, WiFi AP) |
+| pytest | Test framework (pytest-asyncio for async OCPP/WebSocket tests) |
+| esptool | Flash/erase ESP32 via RFC2217 serial |
 | mosquitto_pub/sub | Manual MQTT testing |
 | Wireshark | Network packet analysis |
-| Browser DevTools | Captive portal testing |
-| Multimeter | Phase relay verification |
-| Logic Analyzer | GPIO timing verification |
-| Serial Monitor | Debug log analysis |
-
-### 7.2 Unit Tests
-
-| Test ID | Component | Test Case | Expected Result |
-|---------|-----------|-----------|-----------------|
-| UT-001 | OCPP Parser | Parse valid BootNotification | Correct fields extracted |
-| UT-002 | OCPP Parser | Parse malformed JSON | Error returned, no crash |
-| UT-003 | OCPP Parser | Parse oversized message (>4KB) | Rejected with error |
-| UT-004 | Config | Store WiFi credentials | Persisted in NVS |
-| UT-005 | Config | Retrieve after reboot | Values match stored |
-| UT-006 | Config | Factory reset | Defaults restored |
-| UT-007 | Phase Logic | Calculate 1-phase power | Input/3 returned |
-| UT-008 | Phase Logic | Calculate 3-phase power | Input unchanged |
-| UT-009 | State Machine | Connector Available→Preparing | Valid transition |
-| UT-010 | State Machine | Invalid transition | Rejected |
-| UT-011 | JSON | Serialize MeterValues | Valid OCPP JSON |
-| UT-012 | JSON | Handle special characters | Properly escaped |
-
-### 7.3 Standard Test Cases
-
-#### 7.3.1 TC-100: Basic Charging Cycle
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Power on ESP32 | Boot complete < 10s, serial log shows ready |
-| 2 | Wallbox connects via WebSocket | Connection accepted, BootNotification exchanged |
-| 3 | Wallbox sends StatusNotification (Available) | Status published to MQTT |
-| 4 | EV plugs in (StatusNotification: Preparing) | Status change published |
-| 5 | Wallbox sends Authorize request | AuthorizeConf with Accepted |
-| 6 | Wallbox sends StartTransaction | StartTransactionConf with transactionId |
-| 7 | Session info published to MQTT | Correct transaction details |
-| 8 | Wallbox sends MeterValues periodically | Values published to MQTT |
-| 9 | Wallbox sends StopTransaction | StopTransactionConf received |
-| 10 | Session end published to MQTT | Final meter values included |
-
-**Pass Criteria**: All steps complete without error, MQTT messages match expected format.
-
-#### 7.3.2 TC-101: Remote Start via MQTT
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Wallbox connected, status Available | Status confirmed via MQTT |
-| 2 | Publish start command to MQTT | Command received by ESP32 |
-| 3 | ESP32 sends RemoteStartTransaction | Wallbox receives request |
-| 4 | Wallbox responds with Accepted | StartTransaction follows |
-| 5 | Charging begins | Status changes to Charging |
-
-**Pass Criteria**: Charging starts within 10 seconds of MQTT command.
-
-#### 7.3.3 TC-102: Remote Stop via MQTT
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Charging session active | Status is Charging |
-| 2 | Publish stop command to MQTT | Command received by ESP32 |
-| 3 | ESP32 sends RemoteStopTransaction | Wallbox receives request |
-| 4 | Wallbox responds with Accepted | StopTransaction follows |
-| 5 | Charging stops | Status changes to Finishing/Available |
-
-**Pass Criteria**: Charging stops within 10 seconds of MQTT command.
-
-#### 7.3.4 TC-103: Power Limit Command
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Charging at 11 kW | MeterValues show ~11 kW |
-| 2 | Publish limit command: 5.5 kW | Command received |
-| 3 | ESP32 sends SetChargingProfile | Profile with 5.5 kW limit |
-| 4 | Wallbox applies limit | MeterValues show ~5.5 kW |
-| 5 | Verify MQTT meter topic | Correct power reported |
-
-**Pass Criteria**: Power reduced within 30 seconds, within 10% tolerance.
-
-#### 7.3.5 TC-200: Phase Switch 3→1
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Charging at 7 kW (3-phase) | Phase status shows 3-phase |
-| 2 | Publish limit command: 3.5 kW | Command received |
-| 3 | ESP32 initiates phase switch | State: STOPPING |
-| 4 | RemoteStopTransaction sent | Wallbox stops charging |
-| 5 | Wait for Available status | Status confirmed |
-| 6 | Safety delay (5s) | No relay activity |
-| 7 | Relay switched (L2+L3 OFF) | GPIO 25 = LOW |
-| 8 | RemoteStartTransaction sent | Wallbox resumes |
-| 9 | Charging resumes in 1-phase | MeterValues / 3 reported |
-| 10 | Phase result published | Success, new mode: 1-phase |
-
-**Pass Criteria**: Complete switch < 30s, no relay switching under load.
-
-#### 7.3.6 TC-201: Phase Switch 1→3
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Charging at 3 kW (1-phase) | Phase status shows 1-phase |
-| 2 | Publish limit command: 7.5 kW | Command received |
-| 3 | ESP32 initiates phase switch | State: STOPPING |
-| 4 | RemoteStopTransaction sent | Wallbox stops charging |
-| 5 | Wait for Available status | Status confirmed |
-| 6 | Safety delay (5s) | No relay activity |
-| 7 | Relay switched (L2+L3 ON) | GPIO 25 = HIGH |
-| 8 | RemoteStartTransaction sent | Wallbox resumes |
-| 9 | Charging resumes in 3-phase | MeterValues 1:1 reported |
-| 10 | Phase result published | Success, new mode: 3-phase |
-
-**Pass Criteria**: Complete switch < 30s, no relay switching under load.
-
-#### 7.3.7 TC-300: Captive Portal Configuration
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Hold CONFIG button 5 seconds | AP mode activates (logged to serial) |
-| 2 | Connect to AP (OCPP-ESP32-XXXX) | DHCP assigns IP |
-| 3 | Open browser | Redirected to portal |
-| 4 | Navigate to WiFi page | Network list displayed |
-| 5 | Enter WiFi credentials | Form accepts input |
-| 6 | Save configuration | Success message |
-| 7 | Navigate to MQTT page | Form displayed |
-| 8 | Enter MQTT settings | Form accepts input |
-| 9 | Save and reboot | System restarts |
-| 10 | Verify connections | WiFi + MQTT connected |
-
-**Pass Criteria**: Configuration persists across reboot, connections established.
-
-#### 7.3.8 TC-301: OTA Firmware Update
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Access portal /update page | Current version displayed |
-| 2 | Select valid firmware.bin | File accepted |
-| 3 | Click Upload | Progress bar shows % |
-| 4 | Upload completes | Success message |
-| 5 | System reboots | Automatic reboot |
-| 6 | Verify new version | Version number updated |
-| 7 | Verify functionality | All features working |
-
-**Pass Criteria**: Update completes, system operational, version updated.
-
-### 7.4 Edge Case Tests
-
-#### 7.4.1 EC-100: WebSocket Disconnect During Charging
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Charging session active | Normal operation |
-| 2 | Disconnect Ethernet cable | Connection lost |
-| 3 | Wait 30 seconds | ESP32 detects disconnect |
-| 4 | MQTT status published | Status: disconnected |
-| 5 | Reconnect Ethernet | Link restored |
-| 6 | Wallbox reconnects | BootNotification exchanged |
-| 7 | Session state restored | Charging continues |
-
-**Pass Criteria**: Automatic recovery, no data loss.
-
-#### 7.4.2 EC-101: WiFi Disconnect During Charging
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Charging session active | MQTT publishing |
-| 2 | Disable WiFi AP | WiFi connection lost |
-| 3 | OCPP continues | Wallbox communication OK |
-| 4 | Messages queued | Buffer fills |
-| 5 | Re-enable WiFi AP | WiFi reconnects |
-| 6 | Queued messages sent | MQTT catches up |
-
-**Pass Criteria**: OCPP unaffected, MQTT recovers automatically.
-
-#### 7.4.3 EC-102: Phase Switch Timeout
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Initiate phase switch | STOPPING state entered |
-| 2 | Wallbox doesn't stop (simulate) | Timeout timer starts |
-| 3 | Wait 30 seconds | Timeout expires |
-| 4 | Switch aborted | State returns to IDLE |
-| 5 | Error published to MQTT | Reason: timeout |
-| 6 | Relays unchanged | Original phase mode |
-
-**Pass Criteria**: Safe abort, no relay activity, error reported.
-
-#### 7.4.4 EC-103: Phase Switch Voltage Verification Failure
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Initiate phase switch (3→1) | Normal sequence to SWITCHING |
-| 2 | Relay commanded OFF (L2+L3 disconnected) | GPIO 25 = LOW |
-| 3 | Wallbox MeterValues still show voltage on L2/L3 | Relay stuck or wiring fault |
-| 4 | Voltage mismatch detected | Error state entered |
-| 5 | Transaction NOT restarted | Safety interlock |
-| 6 | Error published to MQTT | Reason: voltage_mismatch |
-
-**Pass Criteria**: No restart on failure, error clearly reported.
-
-#### 7.4.5 EC-104: Rapid Power Limit Changes
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Charging at 11 kW | Stable operation |
-| 2 | Send 10 limit commands in 10s | Commands received |
-| 3 | Monitor system | No crash, no watchdog |
-| 4 | Final limit applied | Last command wins |
-| 5 | Check memory | No leaks |
-
-**Pass Criteria**: System stable, correct final state.
-
-#### 7.4.6 EC-105: Malformed MQTT Commands
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Send invalid JSON | Message ignored |
-| 2 | Send missing fields | Error logged |
-| 3 | Send wrong types | Error logged |
-| 4 | Send oversized payload | Rejected |
-| 5 | System continues | No crash |
-
-**Pass Criteria**: Graceful handling, no crashes.
-
-#### 7.4.7 EC-106: Power Cycle During Phase Switch
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Initiate phase switch | Process started |
-| 2 | Power cycle ESP32 | Immediate restart |
-| 3 | System boots | Normal boot sequence |
-| 4 | Check phase state | Relays in default state |
-| 5 | Check transaction | No orphaned transaction |
-
-**Pass Criteria**: Safe recovery, deterministic state.
-
-#### 7.4.8 EC-107: OTA Update During Charging
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Charging session active | Transaction running |
-| 2 | Start OTA update | Warning displayed |
-| 3 | Confirm update | Transaction stopped first |
-| 4 | Wait for Available | Status confirmed |
-| 5 | Update proceeds | Normal OTA flow |
-
-**Pass Criteria**: Transaction cleanly stopped before update.
-
-#### 7.4.9 EC-108: Maximum Message Size
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Send MeterValues with all fields | Large but valid |
-| 2 | Parse and process | Successful |
-| 3 | Send 4KB+ message | Exceeds limit |
-| 4 | Message rejected | Error response |
-| 5 | System stable | No memory issues |
-
-**Pass Criteria**: Size limits enforced, no buffer overflow.
-
-#### 7.4.10 EC-109: Concurrent MQTT and OCPP Activity
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Wallbox sending MeterValues | High OCPP traffic |
-| 2 | Send multiple MQTT commands | Concurrent processing |
-| 3 | Monitor both interfaces | All messages handled |
-| 4 | Check timing | No excessive delays |
-| 5 | Verify data integrity | No corruption |
-
-**Pass Criteria**: Both interfaces functional under load.
-
-### 7.5 Long-Duration Tests
-
-| Test ID | Duration | Description | Pass Criteria |
-|---------|----------|-------------|---------------|
-| LD-001 | 24 hours | Continuous charging | No memory leaks, stable |
-| LD-002 | 72 hours | Idle with heartbeats | No watchdog resets |
-| LD-003 | 7 days | Normal usage pattern | < 1 unexpected reset |
-| LD-004 | 24 hours | Repeated phase switches | All switches successful |
-
-### 7.6 Test Report Template
-
-```
-═══════════════════════════════════════════════════════════════
-                    OCPP ESP32 TEST REPORT
-═══════════════════════════════════════════════════════════════
-Date:           2026-01-25
-Firmware:       v1.2.3
-Tester:         ___________
-Test Suite:     Standard / Edge Cases / Long Duration
-
-───────────────────────────────────────────────────────────────
-SUMMARY
-───────────────────────────────────────────────────────────────
-Total Tests:    ___
-Passed:         ___
-Failed:         ___
-Skipped:        ___
-Pass Rate:      ___%
-
-───────────────────────────────────────────────────────────────
-FAILED TESTS
-───────────────────────────────────────────────────────────────
-Test ID    | Description              | Failure Reason
------------|--------------------------|---------------------------
-           |                          |
-
-───────────────────────────────────────────────────────────────
-NOTES
-───────────────────────────────────────────────────────────────
-
-
-═══════════════════════════════════════════════════════════════
-```
+| Serial Monitor | Debug log analysis (via WiFiTesterDriver or pyserial RFC2217) |
+
+### 7.2 Unit Test Areas
+
+| Component | What to Test |
+|-----------|-------------|
+| OCPP Parser | Valid messages parsed correctly, malformed JSON rejected, oversized messages (>4KB) rejected |
+| Config Manager | Store/retrieve WiFi and MQTT credentials across reboot, factory reset restores defaults |
+| Phase Logic | 1-phase power = input/3, 3-phase power = input unchanged |
+| State Machine | Valid connector transitions accepted, invalid transitions rejected |
+| JSON Serializer | MeterValues serialize to valid OCPP JSON, special characters escaped |
+
+### 7.3 Test Categories
+
+Detailed test procedures, step tables, and automation commands are in the
+[Test Specification](OCPP-ESP32-Test-Specification.md).
+This section lists what must be tested and the high-level pass criteria.
+
+#### Standard Tests
+
+| Category | Key Pass Criteria |
+|----------|-------------------|
+| Setup | DUT flashed, NVS erased, boots to correct mode |
+| Captive Portal | Portal entry (GPIO 14 or NVS-empty), WiFi/MQTT provisioning, DNS redirect |
+| MQTT Transport | Production mode (Ethernet only), test mode (WiFi), mode switching, fallback |
+| Connection | WebSocket connect, BootNotification, Heartbeat, timeout detection, reconnect |
+| Charging | Full charge cycle, authorization, MeterValues forwarding, transaction IDs |
+| Remote Commands | MQTT start/stop/limit commands translate to correct OCPP actions |
+| Phase Switching | 3→1 and 1→3 switch < 30s, no switch under load, voltage verification, power correction |
+| OTA Update | Upload succeeds, corrupt firmware rejected, rollback on boot failure |
+
+#### Edge Case Tests
+
+| Category | Key Pass Criteria |
+|----------|-------------------|
+| Disconnect/Reconnect | Automatic recovery after WebSocket, WiFi, or MQTT broker disconnect |
+| Phase Switch Errors | Safe abort on timeout, voltage mismatch detection and reporting |
+| Input Validation | Malformed OCPP/MQTT messages handled gracefully, no crash |
+| Concurrent Load | Both OCPP and MQTT interfaces functional under sustained parallel traffic |
+| Power Loss | Safe recovery to known state after power cycle during phase switch |
+| WiFi Resilience | Graceful degradation, automatic reconnection, DHCP renewal |
+| Watchdog | Software and hardware WDT trigger recovery, no false triggers during WiFi disconnect |
+
+#### Long-Duration Tests
+
+| Duration | Description | Pass Criteria |
+|----------|-------------|---------------|
+| 24 hours | Continuous charging | No memory leaks, stable heap |
+| 72 hours | Idle with heartbeats | No watchdog resets |
+| 7 days | Normal usage pattern | < 1 unexpected reset |
+| 3 hours | 100 repeated phase switches | 100% success rate |
 
 ## 8. Project Structure
 
@@ -1649,3 +1446,10 @@ Available → Preparing → Charging → SuspendedEV/SuspendedEVSE → Finishing
 | | | | Boot decision changed from wifi_ssid to mqtt_host |
 | | | | MQTT transport: Ethernet (production) or WiFi (test mode) |
 | | | | WIFI-006 updated for dual transport modes |
+| 1.5 | 2026-02-09 | - | Relay moved from GPIO 25 (Ethernet RXD0 on WT32-ETH01) to GPIO 4 |
+| | | | Replaced incorrect W5500 SPI pin table with WT32-ETH01 LAN8720 RMII pins |
+| | | | Added complete GPIO availability table for WT32-ETH01 header |
+| | | | Added Pi ↔ DUT test wiring table (BCM 22 reads relay state) |
+| 1.6 | 2026-02-09 | - | Slimmed section 7: removed detailed test step tables, reference test spec |
+| | | | Updated test architecture diagram (Pi GPIO, relay readback, emulator sync) |
+| | | | Added WiFiTesterDriver and pytest to test tools |

@@ -104,7 +104,7 @@ ESP32-based OCPP 1.6J Central System that bridges EV charging stations (wallboxe
 | 🔌 ETH MDC | 23 | Ethernet clock |
 | 🔌 ETH MDIO | 18 | Ethernet data |
 | 🔌 ETH Power | 16 | PHY power enable |
-| ⚡ Phase Relay | 25 | Single relay for L2+L3 |
+| ⚡ Phase Relay | 4 | Single relay for L2+L3 |
 | 🔘 Config Button | 14 | Enter config mode (hold 5s) |
 
 ---

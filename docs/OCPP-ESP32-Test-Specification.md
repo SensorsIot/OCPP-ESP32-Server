@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Date** | 2026-02-10 |
 | **Author** | Claude |
 | **Status** | Draft |
@@ -334,6 +334,240 @@ def wait_emu_connected(timeout=30):
     raise TimeoutError(f"Emulator did not connect within {timeout}s")
 ```
 
+### 2.9 DUT State Requirements by Phase
+
+Each execution phase assumes specific DUT configuration and infrastructure state.
+Use this matrix to verify prerequisites before running a phase.
+
+#### DUT Configuration Matrix
+
+| Phase | `test_mode` | `mqtt_host` | `wifi_ssid` | `wifi_pass` | Notes |
+|-------|-------------|-------------|-------------|-------------|-------|
+| 1 (Setup) | — | — | — | — | NVS erased, AP mode |
+| 2 (Captive Portal) | — | — | — | — | NVS empty → auto AP mode |
+| 3a (MT-100) | `false` | `192.168.0.203` | `<home SSID>` | `<home pass>` | Production mode, MQTT via Ethernet |
+| 3b (MT-101) | `true` | `192.168.4.1` | `TestAP` | `password123` | Test mode, MQTT via WiFi |
+| 3c (MT-102) | `false` → `true` | `192.168.4.1` | `TestAP` | `password123` | Transition test |
+| 3d (MT-103) | `true` | `192.168.4.1` | `""` (empty) | — | WiFi fallback test |
+| 4 (MQTT Resilience) | `true` | `192.168.4.1` | `TestAP` | `password123` | Test mode restored |
+| 5–12 | `true` | `192.168.4.1` | `TestAP` | `password123` | Test mode for all remaining phases |
+
+#### Infrastructure Matrix
+
+| Component | Phase 1 | Phase 2 | Phase 3a | Phase 3b–3d | Phase 4 | Phase 5–7 | Phase 8 | Phase 9–12 |
+|-----------|:-------:|:-------:|:--------:|:-----------:|:-------:|:---------:|:-------:|:----------:|
+| Serial Portal | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Pi AP | — | — | — | Yes | Yes | Yes | Yes | Yes |
+| Pi MQTT broker | — | — | — | Yes | Yes | Yes | Yes | Yes |
+| Home LAN broker | — | — | Yes | — | — | — | — | — |
+| Wallbox emulator | — | — | — | — | — | Started at 5 | Yes | Yes |
+| Pi BCM 22 (input) | Init | — | — | — | — | — | Yes | As needed |
+
+---
+
+### 2.10 Precondition Check Helpers
+
+Named precondition patterns keep Step 0 entries concise. Each pattern maps to
+one or more helper checks. Use these in test setup/fixtures.
+
+#### Named Patterns
+
+| Pattern | Checks Performed | Used By |
+|---------|-----------------|---------|
+| `BASIC_DUT` | DUT reachable via Ethernet ping | All phases |
+| `TEST_MODE_MQTT` | BASIC_DUT + Pi AP running + DUT MQTT connected to Pi broker | Phase 4–12 |
+| `WALLBOX_READY` | TEST_MODE_MQTT + wallbox emulator connected to DUT | Phase 5–9, 11–12 |
+| `PHASE_READY` | WALLBOX_READY + Pi BCM 22 initialized as input | Phase 8, parts of 9/11 |
+
+#### Helper Functions
+
+```python
+import subprocess, time, requests
+
+EMU_API = "http://localhost:8080"
+
+def check_dut_reachable(dut_ip="192.168.0.105"):
+    """Ping DUT Ethernet interface."""
+    result = subprocess.run(["ping", "-c", "1", "-W", "2", dut_ip],
+                            capture_output=True)
+    assert result.returncode == 0, f"DUT not reachable at {dut_ip}"
+
+def check_pi_ap_running(wt):
+    """Verify Pi WiFi AP is active."""
+    status = wt.ap_status()
+    assert status.get("active"), "Pi AP not running — call wt.ap_start() first"
+
+def check_mqtt_connected(wt, slot, timeout=10):
+    """Monitor serial for MQTT connected message."""
+    result = wt.serial_monitor(slot, pattern="MQTT connected", timeout=timeout)
+    assert "MQTT connected" in result.get("output", ""), "DUT MQTT not connected"
+
+def check_dut_test_mode(wt, slot, timeout=10):
+    """Verify DUT is in test mode via serial."""
+    result = wt.serial_monitor(slot, pattern="test_mode=ON", timeout=timeout)
+    assert "test_mode=ON" in result.get("output", ""), "DUT not in test mode"
+
+def check_wallbox_connected(timeout=15):
+    """Verify wallbox emulator is connected to DUT."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            state = requests.get(f"{EMU_API}/api/state", timeout=2).json()
+            if state.get("connected"):
+                return state
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+    raise AssertionError("Wallbox emulator not connected")
+
+def check_pi_gpio_initialized(wt):
+    """Verify Pi BCM 22 is set as input for relay readback."""
+    result = wt.gpio_get()
+    pin22 = result.get("pins", {}).get("22", {})
+    assert pin22.get("mode") in ("input", "z"), \
+        "BCM 22 not initialized — call wt.gpio_set(22, 'z') first"
+
+# Composite pattern checks
+def check_basic_dut(dut_ip="192.168.0.105"):
+    check_dut_reachable(dut_ip)
+
+def check_test_mode_mqtt(wt, slot, dut_ip="192.168.0.105"):
+    check_dut_reachable(dut_ip)
+    check_pi_ap_running(wt)
+    check_mqtt_connected(wt, slot)
+
+def check_wallbox_ready(wt, slot, dut_ip="192.168.0.105"):
+    check_test_mode_mqtt(wt, slot, dut_ip)
+    check_wallbox_connected()
+
+def check_phase_ready(wt, slot, dut_ip="192.168.0.105"):
+    check_wallbox_ready(wt, slot, dut_ip)
+    check_pi_gpio_initialized(wt)
+```
+
+---
+
+### 2.11 Phase Transition Procedures
+
+DUT configuration changes between phases require the captive portal API.
+`WiFiTesterDriver` does not provide `serial_send()` or `ssh_exec()`, so all
+automated config changes go through the portal HTTP API.
+
+> **Manual alternative:** `config_set` via serial terminal (e.g. `idf.py monitor`)
+> works for manual testing but is not available from automated test scripts.
+
+#### Phase 2 → 3a: Portal → Production Mode
+
+```python
+# 1. Enter captive portal (DUT already in AP mode after Phase 2)
+#    If DUT left portal: hold GPIO 14 for 5s
+wt.gpio_set(27, 0); time.sleep(5.5); wt.gpio_set(27, "z")
+
+# 2. Join DUT AP
+wt.sta_join("OCPP-ESP32-XXXX")  # replace XXXX with actual suffix
+
+# 3. Configure for production mode
+import requests
+requests.post("http://192.168.1.1/api/config", json={
+    "test_mode": 0,
+    "mqtt_host": "192.168.0.203",
+    "mqtt_port": 1883,
+    "mqtt_prefix": "ocpp",
+    "wifi_ssid": "<home_ssid>",
+    "wifi_pass": "<home_pass>"
+})
+
+# 4. Reboot
+requests.post("http://192.168.1.1/api/reboot")
+wt.sta_leave()
+
+# 5. Verify via serial
+result = wt.serial_monitor(SLOT, pattern="test_mode=OFF", timeout=15)
+assert "test_mode=OFF" in result["output"]
+```
+
+#### Phase 3a → 3b: Production → Test Mode
+
+```python
+# 1. Enter captive portal (hold GPIO 14)
+wt.gpio_set(27, 0); time.sleep(5.5); wt.gpio_set(27, "z")
+
+# 2. Join DUT AP
+wt.sta_join("OCPP-ESP32-XXXX")
+
+# 3. Configure for test mode
+requests.post("http://192.168.1.1/api/config", json={
+    "test_mode": 1,
+    "mqtt_host": "192.168.4.1",
+    "mqtt_port": 1883,
+    "mqtt_prefix": "ocpp",
+    "wifi_ssid": "TestAP",
+    "wifi_pass": "password123"
+})
+
+# 4. Start Pi AP BEFORE rebooting DUT (so DUT can connect on boot)
+wt.sta_leave()
+wt.ap_start("TestAP", "password123")
+
+# 5. Reboot DUT
+requests.post("http://192.168.1.1/api/reboot")
+
+# 6. Verify MQTT connected via WiFi
+result = wt.serial_monitor(SLOT, pattern="MQTT connected", timeout=30)
+assert "MQTT connected" in result["output"]
+```
+
+#### Phase 3b → 3d: Test Mode → Empty SSID
+
+```python
+# 1. Enter captive portal
+wt.gpio_set(27, 0); time.sleep(5.5); wt.gpio_set(27, "z")
+
+# 2. Join DUT AP, set empty wifi_ssid
+wt.sta_join("OCPP-ESP32-XXXX")
+requests.post("http://192.168.1.1/api/config", json={
+    "test_mode": 1,
+    "wifi_ssid": "",
+    "wifi_pass": ""
+})
+requests.post("http://192.168.1.1/api/reboot")
+wt.sta_leave()
+
+# 3. Verify: no WiFi STA, MQTT falls back to Ethernet
+result = wt.serial_monitor(SLOT, pattern="MQTT connected", timeout=15)
+# Expect NO "WiFi STA" messages in output
+```
+
+#### Phase 3d → 4: Restore Test Mode
+
+Same as Phase 3a → 3b procedure above. Restores `wifi_ssid=TestAP` and
+`test_mode=1` via captive portal.
+
+#### Phase 4 → 5: Start Wallbox Emulator
+
+No DUT reconfiguration needed. Start the wallbox emulator process:
+
+```python
+import subprocess
+emu_proc = subprocess.Popen(
+    ["python", "-m", "ocpp_test_wallbox.main", "run"],
+    cwd="ocpp-test-wallbox"
+)
+# Verify connection
+check_wallbox_connected(timeout=15)
+```
+
+#### Phase 7 → 8: Initialize GPIO for Relay Readback
+
+```python
+# Set BCM 22 as input for relay state readback
+wt.gpio_set(22, "z")
+
+# Verify
+result = wt.gpio_get()
+assert result["pins"]["22"]["mode"] in ("input", "z")
+```
+
 ---
 
 ## 3. Setup Test Cases
@@ -348,6 +582,9 @@ These tests establish a clean, known starting state for all subsequent tests.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | Verify Serial Portal reachable: `wt.get_devices()` returns device list | Portal online |
+| 0b | Verify firmware file exists: `os.path.isfile("ocpp-esp32/build/ocpp-esp32.bin")` | File present |
+| 0c | Initialize Pi GPIOs: `wt.gpio_set(22, "z")`, `wt.gpio_set(17, "z")`, `wt.gpio_set(18, "z")`, `wt.gpio_set(27, "z")` | All pins safe defaults |
 | 1 | Enter bootloader: `wt.gpio_set(18, 0)`, `wt.gpio_set(17, 0)`, sleep, `wt.gpio_set(17, "z")` | DUT in download mode |
 | 2 | Flash firmware via esptool (`--before=no_reset`) | `esptool.py write_flash` exits 0 |
 | 3 | Release boot pin: `wt.gpio_set(18, "z")` | DUT free to boot normally |
@@ -370,6 +607,7 @@ These tests establish a clean, known starting state for all subsequent tests.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | Verify DUT booted: `wt.serial_monitor(SLOT, pattern="boot:0x", timeout=10)` | Boot pattern found, no crash backtrace |
 | 1 | Check serial console `config` command | All values at defaults |
 | 2 | Check heap memory | Free heap > 100KB |
 | 3 | Verify no WiFi STA connection | WiFi status shows "disconnected" |
@@ -396,6 +634,7 @@ WiFi credentials). All subsequent tests depend on a configured DUT.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_basic_dut()` — verify DUT reachable via ping or serial | DUT responsive |
 | 1 | **Auto-entry:** Erase NVS, reset DUT | Boots into config mode (no mqtt_host) |
 | 2 | **Button entry:** Hold GPIO 14 LOW for 5 seconds via tester GPIO 27 | `Entering config mode` logged |
 | 3 | Verify AP starts | SSID `OCPP-ESP32-XXXX` visible in WiFi scan |
@@ -416,6 +655,7 @@ WiFi credentials). All subsequent tests depend on a configured DUT.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | Verify DUT AP visible: `wt.sta_scan()` contains `OCPP-ESP32-*` | AP SSID found |
 | 1 | GET `/wifi` via tester relay | WiFi config page loads |
 | 2 | GET `/api/wifi/scan` | Network list JSON returned |
 | 3 | POST `/api/config` with `wifi_ssid`, `wifi_pass` | `{"ok": true}` |
@@ -437,6 +677,7 @@ WiFi credentials). All subsequent tests depend on a configured DUT.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | Verify tester connected to DUT AP: `wt.sta_status()` shows IP 192.168.1.x | Connected to DUT |
 | 1 | POST `/api/config` with `mqtt_host=192.168.4.1`, `mqtt_port=1883`, `mqtt_prefix=ocpp` | `{"ok": true}` |
 | 2 | Also set `wifi_ssid` and `wifi_pass` for the tester AP, `test_mode=1` | WiFi + test mode saved |
 | 3 | POST `/api/reboot` | DUT reboots |
@@ -457,6 +698,7 @@ WiFi credentials). All subsequent tests depend on a configured DUT.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | Verify portal HTTP reachable: `requests.get("http://192.168.1.1/")` returns 200 | Portal serving pages |
 | 1 | Query any domain via DNS | `nslookup google.com` |
 | 2 | Verify response | Returns 192.168.1.1 (portal IP) |
 | 3 | HTTP GET to random domain via tester relay | Request received |
@@ -481,6 +723,8 @@ These tests follow captive portal because they depend on a configured DUT.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | Verify production config set via captive portal (Section 2.11: Phase 2 → 3a) | `test_mode=false`, `mqtt_host=192.168.0.203` |
+| 0b | Verify home LAN broker reachable: `ping -c 1 192.168.0.203` | Broker host responds |
 | 1 | Reset DUT | Boot sequence in serial log |
 | 2 | Verify serial: `Starting in NORMAL mode (test_mode=OFF)` | Normal mode |
 | 3 | Verify serial: NO `WiFi STA` messages | WiFi not started |
@@ -503,8 +747,10 @@ These tests follow captive portal because they depend on a configured DUT.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | Start Pi AP: `wt.ap_start("TestAP", "password123")` | AP active |
+| 0b | Verify Pi MQTT broker: `mosquitto_pub -h 192.168.0.87 -t test -m ping` exits 0 | Broker responsive |
 | 1 | Start WiFi tester AP | AP active on 192.168.4.1 |
-| 2 | Configure DUT: `config_set test_mode 1`, `config_set wifi_ssid TestAP` | Settings saved |
+| 2 | Configure DUT via captive portal (Section 2.11: Phase 3a → 3b): `test_mode=1`, `wifi_ssid=TestAP` | Settings saved |
 | 3 | Reset DUT | Boot sequence |
 | 4 | Verify serial: `Starting in NORMAL mode (test_mode=ON)` | Test mode |
 | 5 | Verify serial: `Test mode: starting WiFi STA for MQTT` | WiFi STA started |
@@ -512,6 +758,10 @@ These tests follow captive portal because they depend on a configured DUT.
 | 7 | Verify tester sees DUT as connected station | `wt.ap_status()` shows DUT IP |
 
 **Pass Criteria:** MQTT connects via WiFi through tester AP, Ethernet still active for OCPP.
+
+> **Automation note:** Step 2 references `config_set` via serial console. For automation,
+> use captive portal API (Section 2.11). `config_set` is available via direct serial
+> terminal only.
 
 **Automation:** `pytest tests/test_mqtt_transport.py::test_test_mode -v`
 
@@ -526,15 +776,21 @@ These tests follow captive portal because they depend on a configured DUT.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | Verify DUT in production mode: serial shows `test_mode=OFF` | Production mode confirmed |
+| 0b | Verify Pi AP running: `check_pi_ap_running(wt)` | AP active |
 | 1 | Verify MQTT connected via Ethernet | Baseline |
-| 2 | Via serial console: `config_set test_mode 1` | Setting persisted |
-| 3 | Via serial console: `config_set wifi_ssid TestAP`, `config_set wifi_pass password123` | WiFi creds set |
+| 2 | Via captive portal (Section 2.11): set `test_mode=1` | Setting persisted |
+| 3 | Via captive portal: set `wifi_ssid=TestAP`, `wifi_pass=password123` | WiFi creds set |
 | 4 | Reboot DUT (serial: `reboot`) | Restart |
 | 5 | Verify WiFi STA connects to tester AP | DUT appears in station list |
 | 6 | Verify MQTT reconnects via WiFi | `MQTT connected` in serial |
 | 7 | OCPP still works on Ethernet | Wallbox can connect |
 
 **Pass Criteria:** Seamless transition from Ethernet MQTT to WiFi MQTT after config change + reboot.
+
+> **Automation note:** Steps 2–3 reference `config_set` via serial console. For automation,
+> use captive portal API (Section 2.11). `config_set` is available via direct serial
+> terminal only.
 
 **Automation:** `pytest tests/test_mqtt_transport.py::test_switch_to_test_mode -v`
 
@@ -548,6 +804,7 @@ These tests follow captive portal because they depend on a configured DUT.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | Verify empty SSID config set via captive portal (Section 2.11: Phase 3b → 3d) | `wifi_ssid=""` confirmed |
 | 1 | Reset DUT | Boot sequence |
 | 2 | Verify serial: `Starting in NORMAL mode (test_mode=ON)` | Test mode |
 | 3 | Verify NO `WiFi STA` messages | No WiFi SSID → skip WiFi |
@@ -574,6 +831,7 @@ and the Mosquitto broker, so broker restarts are isolated from the home network.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_test_mode_mqtt(wt, SLOT)` — verify DUT reachable, Pi AP running, MQTT connected | TEST_MODE_MQTT |
 | 1 | Publish invalid JSON to `command/start` | Message ignored |
 | 2 | Publish `{"power_w": "invalid"}` to `command/limit` | Error logged |
 | 3 | Publish empty message to `command/stop` | Treated as valid (empty = stop all) |
@@ -592,18 +850,24 @@ and the Mosquitto broker, so broker restarts are isolated from the home network.
 - Active message publishing (status topic)
 - No wallbox connected
 - Baseline reconnect count: `R_before`
+- Test host has SSH key access to Pi (`ssh-copy-id pi@192.168.0.87`)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Stop Mosquitto on Pi: `wt.ssh_exec("sudo systemctl stop mosquitto")` | Connection lost |
+| 0 | `check_test_mode_mqtt(wt, SLOT)` — verify DUT reachable, Pi AP running, MQTT connected | TEST_MODE_MQTT |
+| 1 | Stop Mosquitto on Pi: `subprocess.run(["ssh", "pi@192.168.0.87", "sudo", "systemctl", "stop", "mosquitto"])` | Connection lost |
 | 2 | Verify DUT detects disconnect | Serial log: "MQTT disconnected" |
 | 3 | Wait 10 seconds | DUT retrying |
-| 4 | Restart Mosquitto: `wt.ssh_exec("sudo systemctl start mosquitto")` | Broker available |
+| 4 | Restart Mosquitto: `subprocess.run(["ssh", "pi@192.168.0.87", "sudo", "systemctl", "start", "mosquitto"])` | Broker available |
 | 5 | Verify DUT reconnects | Within 30 seconds |
 | 6 | Verify publishing resumes | Status messages flowing |
 | 7 | Check reconnect count | `R_before + 1` |
 
 **Pass Criteria:** Automatic MQTT reconnection after broker restart on the Pi's isolated network.
+
+> **Infrastructure note:** This test uses `subprocess.run(["ssh", ...])` to control
+> Mosquitto on the Pi. The test host needs SSH key access: `ssh-copy-id pi@192.168.0.87`.
+> `WiFiTesterDriver` does not provide `ssh_exec()`.
 
 **Automation:** `pytest tests/test_mqtt_resilience.py::test_mqtt_broker_restart -v`
 
@@ -626,6 +890,9 @@ Validates OCPP WebSocket connection handling between wallbox and server.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | `check_test_mode_mqtt(wt, SLOT)` | TEST_MODE_MQTT |
+| 0b | Verify DUT Ethernet: `check_dut_reachable()` | DUT IP responds |
+| 0c | Verify no stale wallbox: `emu_state()` raises or `connected: false` | No prior connection |
 | 1 | Connect wallbox emulator via WebSocket to `ws://{DUT_ETH_IP}:8887/ocpp/TEST001` | Connection accepted |
 | 2 | Send BootNotification | Response received within 5s |
 | 3 | Check response status | `status: Accepted` |
@@ -646,6 +913,7 @@ Validates OCPP WebSocket connection handling between wallbox and server.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Send Heartbeat request | Response received |
 | 2 | Check response | Contains `currentTime` field |
 | 3 | Wait 60 seconds | Heartbeat sent automatically |
@@ -665,6 +933,7 @@ Validates OCPP WebSocket connection handling between wallbox and server.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Send StatusNotification (Available) | Response received |
 | 2 | Check response | Empty object `{}` (acknowledged) |
 | 3 | Verify MQTT status published | `status: Available` in `ocpp/TEST001/status` |
@@ -685,6 +954,7 @@ Validates OCPP WebSocket connection handling between wallbox and server.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Stop sending heartbeats from wallbox | Wallbox goes silent |
 | 2 | Wait 35 seconds | DUT detects timeout |
 | 3 | Verify disconnection logged | Serial shows "WebSocket timeout" |
@@ -704,6 +974,7 @@ Validates OCPP WebSocket connection handling between wallbox and server.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_test_mode_mqtt(wt, SLOT)` — verify MQTT still connected after disconnect | TEST_MODE_MQTT (wallbox disconnected state) |
 | 1 | Reconnect wallbox emulator | Connection accepted |
 | 2 | Send BootNotification | Response received |
 | 3 | Verify status in response | `status: Accepted` |
@@ -729,6 +1000,7 @@ Validates charging transaction lifecycle.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify `connector_status: Available` | WALLBOX_READY, Available |
 | 1 | Send StatusNotification (Preparing) | EV plugged in |
 | 2 | Send Authorize request (idTag: "TEST123") | `status: Accepted` |
 | 3 | Send StartTransaction | Response with `transactionId` |
@@ -756,6 +1028,7 @@ Validates charging transaction lifecycle.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Send Authorize (idTag: "UNKNOWN_TAG") | `status: Accepted` |
 | 2 | Send Authorize (idTag: "") | `status: Accepted` |
 | 3 | Send StartTransaction with any idTag | Transaction starts |
@@ -775,6 +1048,7 @@ Validates charging transaction lifecycle.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify active transaction (`transaction_id` not None) | WALLBOX_READY, transaction active |
 | 1 | Send MeterValues (energy: 500 Wh, power: 7400 W) | Acknowledged |
 | 2 | Wait 1 second | MQTT publishes |
 | 3 | Verify MQTT session topic | `energy_wh: 500`, `power_w: 7400` |
@@ -795,6 +1069,7 @@ Validates charging transaction lifecycle.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify no active transaction | WALLBOX_READY, no transaction |
 | 1 | Start transaction | Get `transactionId: N` |
 | 2 | Stop transaction | Transaction N stopped |
 | 3 | Start new transaction | Get `transactionId: N+1` |
@@ -819,6 +1094,7 @@ Validates MQTT-initiated commands to the wallbox.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify `connector_status: Available` | WALLBOX_READY, Available |
 | 1 | Publish `{"id_tag": "ENERGY_MANAGER"}` to `ocpp/TEST001/command/start` | Command received |
 | 2 | Wait for RemoteStartTransaction on WebSocket | Wallbox receives request |
 | 3 | Wallbox responds Accepted | Response sent |
@@ -841,6 +1117,7 @@ Validates MQTT-initiated commands to the wallbox.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify active transaction | WALLBOX_READY, transaction active |
 | 1 | Publish `{}` to `ocpp/TEST001/command/stop` | Command received |
 | 2 | Wait for RemoteStopTransaction on WebSocket | Wallbox receives request |
 | 3 | Wallbox responds Accepted | Response sent |
@@ -864,6 +1141,7 @@ Validates MQTT-initiated commands to the wallbox.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify active transaction, Charging status | WALLBOX_READY, Charging |
 | 1 | Publish `{"power_w": 5500}` to `ocpp/TEST001/command/limit` | Command received |
 | 2 | Wait for SetChargingProfile on WebSocket | Profile sent to wallbox |
 | 3 | Verify profile limit | Limit set to ~24A (5500W / 230V) |
@@ -886,6 +1164,7 @@ Validates MQTT-initiated commands to the wallbox.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify active transaction | WALLBOX_READY, transaction active |
 | 1 | Publish `{"power_w": 0}` to `ocpp/TEST001/command/limit` | Command received |
 | 2 | Wait for SetChargingProfile | Profile with 0A limit |
 | 3 | Wallbox stops drawing power | MeterValues show 0W |
@@ -971,6 +1250,8 @@ def sync_emulator_phase(wt):
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | `check_phase_ready(wt, SLOT)` | PHASE_READY |
+| 0b | Verify relay baseline: `assert read_relay_state(wt) == 1` + emulator `phase_mode: 3-phase` | 3-phase baseline |
 | 1 | Verify relay HIGH: `assert read_relay_state(wt) == 1` | 3-phase confirmed |
 | 2 | Publish `{"power_w": 3500}` to `command/limit` | Below 4.1 kW threshold |
 | 3 | DUT initiates phase switch | Serial: `Phase switch: 3-phase → 1-phase` |
@@ -999,6 +1280,8 @@ def sync_emulator_phase(wt):
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | `check_phase_ready(wt, SLOT)` | PHASE_READY |
+| 0b | Verify relay baseline: `assert read_relay_state(wt) == 0` + emulator `phase_mode: 1-phase` | 1-phase baseline |
 | 1 | Verify relay LOW: `assert read_relay_state(wt) == 0` | 1-phase confirmed |
 | 2 | Publish `{"power_w": 7500}` to `command/limit` | Above 4.1 kW threshold |
 | 3 | DUT initiates phase switch | Serial: `Phase switch: 1-phase → 3-phase` |
@@ -1027,6 +1310,8 @@ def sync_emulator_phase(wt):
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | `check_phase_ready(wt, SLOT)` | PHASE_READY |
+| 0b | Verify emulator Charging + `power_w > 0` | Active load confirmed |
 | 1 | Record relay: `relay_before = read_relay_state(wt)` | Initial state captured |
 | 2 | Publish phase switch command via MQTT | Switch initiated |
 | 3 | Verify DUT sends RemoteStopTransaction **first** | Stop before switch |
@@ -1048,6 +1333,8 @@ def sync_emulator_phase(wt):
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | `check_phase_ready(wt, SLOT)` | PHASE_READY |
+| 0b | Verify emulator `connector_status: Available` + relay baseline | Available, ready for switch |
 | 1 | Initiate 3→1 phase switch | Switch sequence starts |
 | 2 | Relay switches: `wait_relay_change(wt, 0)` | BCM 22 goes LOW |
 | 3 | **Do NOT sync emulator** — keep it in 3-phase mode | Emulator still reports L2/L3 voltage=230V |
@@ -1071,6 +1358,8 @@ def sync_emulator_phase(wt):
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | `check_phase_ready(wt, SLOT)` | PHASE_READY |
+| 0b | Verify 1-phase mode: `read_relay_state(wt) == 0` | Relay LOW confirmed |
 | 1 | Verify 1-phase: `assert read_relay_state(wt) == 0` | Confirmed |
 | 2 | Emulator sends MeterValues: 11000 W (3-phase equivalent) | Raw value received by DUT |
 | 3 | DUT applies correction: 11000 / 3 = 3667 W | Corrected value |
@@ -1101,6 +1390,9 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | `check_test_mode_mqtt(wt, SLOT)` | TEST_MODE_MQTT |
+| 0b | Verify DUT Ethernet: `check_dut_reachable()` | DUT IP responds |
+| 0c | Verify emulator not running: `requests.get(EMU_API)` raises `ConnectionError` | No prior emulator |
 | 1 | Start emulator: `python -m ocpp_test_wallbox.main run` | Process starts |
 | 2 | Wait for connection: `wait_emu_connected(timeout=15)` | `connected: true` |
 | 3 | Verify emulator state: `emu_state()` | `connector_status: Available` |
@@ -1121,6 +1413,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify `connector_status: Available` | WALLBOX_READY, Available |
 | 1 | Plug in: `emu_plug()` | `connector_status: Preparing` |
 | 2 | Wait: `wait_emu_status("Preparing")` | Status confirmed |
 | 3 | Start charging: `emu_start()` | Transaction begins |
@@ -1149,6 +1442,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Set phase mode: `emu_set_phase("3-phase")` | Phase mode confirmed |
 | 2 | Start charging cycle: `emu_plug()`, `emu_start()` | Charging |
 | 3 | Wait for MeterValues (≥1 interval) | Values reported |
@@ -1173,6 +1467,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Set phase mode: `emu_set_phase("1-phase")` | Phase mode confirmed |
 | 2 | Start charging cycle: `emu_plug()`, `emu_start()` | Charging |
 | 3 | Wait for MeterValues (≥1 interval) | Values reported |
@@ -1198,6 +1493,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify `connector_status: Available` | WALLBOX_READY, Available |
 | 1 | Enable authorization: `emu_set_authorize(True)` | `authorize_required: true` |
 | 2 | Plug in: `emu_plug()` | Preparing |
 | 3 | Start charging: `emu_start(id_tag="AUTH_TEST")` | Transaction begins |
@@ -1225,6 +1521,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Start charging: `emu_plug()`, `emu_start()` | Charging |
 | 2 | Record initial limit: `emu_state()["current_limit_a"]` | Baseline |
 | 3 | Publish MQTT limit: `{"power_w": 5500}` to `command/limit` | Command sent |
@@ -1249,6 +1546,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Start charging: `emu_plug()`, `emu_start()` | Charging |
 | 2 | Verify `connector_status: Charging` | Baseline |
 | 3 | Publish MQTT limit: `{"power_w": 0}` to `command/limit` | Zero limit |
@@ -1277,6 +1575,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Set 3-phase: `emu_set_phase("3-phase")` | 3-phase mode |
 | 2 | Start charging: `emu_plug()`, `emu_start()` | Charging |
 | 3 | Wait 15 seconds | Energy accumulates |
@@ -1305,6 +1604,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Verify connected: `assert emu_state()["connected"]` | Baseline |
 | 2 | Reset DUT: `wt.gpio_set(17, 0)`, sleep, `wt.gpio_set(17, "z")` | DUT reboots |
 | 3 | Wait for emulator to detect disconnect | `connected: false` within 10s |
@@ -1328,6 +1628,7 @@ console or GPIO interaction required.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` — verify emulator #1 connected | WALLBOX_READY |
 | 1 | Verify emulator #1 connected | `connected: true` |
 | 2 | Start emulator #2 on port 8081: `--web-port 8081 --config config/test002.yaml` | Process starts |
 | 3 | Emulator #2 connects to `ws://{DUT}:8887/ocpp/TEST002` | Connection attempt |
@@ -1356,6 +1657,9 @@ Validates over-the-air firmware update functionality.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0a | `check_test_mode_mqtt(wt, SLOT)` | TEST_MODE_MQTT |
+| 0b | Verify firmware file: `os.path.isfile("ocpp-esp32/build/ocpp-esp32.bin")` | File present |
+| 0c | Record current version `V_before` from serial or MQTT | Version captured |
 | 1 | Navigate to `/update` in browser | Update page loads |
 | 2 | Verify current version displayed | Matches `V_before` |
 | 3 | Select new firmware.bin file | File accepted |
@@ -1381,6 +1685,7 @@ Validates over-the-air firmware update functionality.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_test_mode_mqtt(wt, SLOT)` + record `V_before` | TEST_MODE_MQTT, version captured |
 | 1 | Upload corrupt firmware file | Upload starts |
 | 2 | Firmware validation fails | Error message: "Invalid firmware" |
 | 3 | DUT remains on current version | Version unchanged |
@@ -1400,6 +1705,7 @@ Validates over-the-air firmware update functionality.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_basic_dut()` + record `V_before` + verify bad firmware file exists | DUT reachable, files ready |
 | 1 | Upload bad firmware | Upload succeeds |
 | 2 | DUT reboots to new partition | Boot attempt |
 | 3 | New firmware crashes | Watchdog triggers |
@@ -1421,6 +1727,7 @@ Validates over-the-air firmware update functionality.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify active transaction + firmware file exists | WALLBOX_READY, transaction active, OTA file ready |
 | 1 | Start OTA upload | Upload begins |
 | 2 | Verify warning displayed | "Active transaction will be stopped" |
 | 3 | Confirm update | Transaction stopped first |
@@ -1447,6 +1754,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify active transaction | WALLBOX_READY, Charging |
 | 1 | Disconnect wallbox (close WebSocket) | Connection lost |
 | 2 | Verify MQTT status | `connected: false` published |
 | 3 | Wait 10 seconds | DUT in disconnected state |
@@ -1471,6 +1779,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify MQTT publishing + active transaction | WALLBOX_READY, MQTT active, Charging |
 | 1 | Disable WiFi AP | WiFi connection lost |
 | 2 | OCPP continues operating | Wallbox communication OK |
 | 3 | Verify serial log | "WiFi disconnected, MQTT queuing" |
@@ -1493,6 +1802,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_phase_ready(wt, SLOT)` + verify active transaction | PHASE_READY, Charging |
 | 1 | Initiate phase switch via MQTT | STOPPING state entered |
 | 2 | RemoteStopTransaction sent | Wallbox doesn't stop |
 | 3 | Wait 30 seconds | Timeout timer expires |
@@ -1516,6 +1826,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify Charging at ~11 kW | WALLBOX_READY, Charging |
 | 1 | Send 10 power limit commands in 10 seconds | Rapid commands |
 | 2 | Monitor DUT heap | No memory leaks |
 | 3 | Monitor watchdog | No resets |
@@ -1536,6 +1847,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Send invalid JSON | `CallError: FormationViolation` |
 | 2 | Send valid JSON, missing required fields | `CallError: PropertyConstraintViolation` |
 | 3 | Send unknown action | `CallError: NotImplemented` |
@@ -1556,6 +1868,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Send MeterValues with all fields (large but valid) | Accepted |
 | 2 | Send 4KB message | At limit, processed |
 | 3 | Send 5KB message | Rejected, error response |
@@ -1575,6 +1888,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` | WALLBOX_READY |
 | 1 | Generate high OCPP traffic | 10 msg/sec |
 | 2 | Generate high MQTT traffic | 10 cmd/sec |
 | 3 | Run for 60 seconds | Sustained load |
@@ -1595,6 +1909,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_phase_ready(wt, SLOT)` + verify active transaction | PHASE_READY, Charging |
 | 1 | Initiate phase switch | Process started |
 | 2 | Power cycle DUT mid-switch | Immediate restart |
 | 3 | DUT boots | Normal boot sequence |
@@ -1617,6 +1932,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_test_mode_mqtt(wt, SLOT)` | TEST_MODE_MQTT |
 | 1 | Normal operation | RSSI > -60 dBm |
 | 2 | Increase distance/attenuation | RSSI decreases |
 | 3 | At -70 dBm | Connection maintained |
@@ -1639,6 +1955,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_test_mode_mqtt(wt, SLOT)` + record `IP_before` | TEST_MODE_MQTT, IP captured |
 | 1 | Wait 60+ seconds | Lease expires |
 | 2 | DHCP renewal attempt | Automatic |
 | 3 | Verify IP | Same or new IP assigned |
@@ -1660,6 +1977,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_basic_dut()` + verify serial shows health checks | DUT running, WDT active |
 | 1 | Monitor serial: health checks every 5s | Normal operation |
 | 2 | Trigger task hang (test firmware) | Main task stops responding |
 | 3 | Wait 65 seconds | Watchdog timeout |
@@ -1680,6 +1998,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_basic_dut()` + verify serial shows "Hardware WDT initialized" | DUT running, HW WDT active |
 | 1 | Verify serial: "Hardware WDT initialized" | WDT active |
 | 2 | Normal operation | WDT fed regularly |
 | 3 | If software watchdog fails | Hardware WDT triggers |
@@ -1699,6 +2018,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_test_mode_mqtt(wt, SLOT)` + verify WDT active via serial | TEST_MODE_MQTT, WDT running |
 | 1 | Disable WiFi AP | Connection lost |
 | 2 | Wait 5 minutes | Extended disconnect |
 | 3 | Monitor serial | Health checks continue |
@@ -1720,6 +2040,7 @@ Tests for error handling, boundary conditions, and recovery from unexpected inpu
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_basic_dut()` + record `H_before` from serial heap command | DUT running, heap > 100KB |
 | 1 | Monitor heap via serial | Stable at `H_before` |
 | 2 | Simulate memory pressure | Heap decreases |
 | 3 | Warning threshold crossed | "Low heap" logged |
@@ -1763,6 +2084,7 @@ Stability and endurance tests run over extended periods.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + record baseline heap and uptime | WALLBOX_READY, metrics captured |
 | 1 | Start charging transaction | Session begins |
 | 2 | Run for 24 hours | Continuous operation |
 | 3 | MeterValues sent every 30s | 2880 messages |
@@ -1788,6 +2110,7 @@ Stability and endurance tests run over extended periods.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + verify no active transaction | WALLBOX_READY, idle |
 | 1 | Start monitoring | Baseline state |
 | 2 | Run for 72 hours | Idle operation |
 | 3 | Heartbeats every 60s | 4320 heartbeats |
@@ -1811,6 +2134,7 @@ Stability and endurance tests run over extended periods.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_wallbox_ready(wt, SLOT)` + record baseline reset count | WALLBOX_READY, baseline captured |
 | 1 | Simulate daily charging pattern | 2-3 sessions/day |
 | 2 | Run for 7 days | 14-21 transactions |
 | 3 | Include WiFi disconnects | 1-2 per day |
@@ -1834,6 +2158,7 @@ Stability and endurance tests run over extended periods.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
+| 0 | `check_phase_ready(wt, SLOT)` + verify 3-phase baseline | PHASE_READY, 3-phase |
 | 1 | Start charging in 3-phase | Initial state |
 | 2 | Switch 3→1→3 (one cycle) | Complete switch |
 | 3 | Repeat 100 times | 200 individual switches |
@@ -2022,20 +2347,20 @@ curl -s -X POST http://localhost:8080/api/authorize -H 'Content-Type: applicatio
 
 ### Execution Phases
 
-| Phase | Category | Tests | Requires Human | Requires DUT | Duration |
-|-------|----------|------:|:--------------:|:------------:|----------|
-| 1 | Setup | 2 | No | Yes | 5 min |
-| 2 | Captive Portal | 4 | No | Yes | 15 min |
-| 3 | MQTT Transport | 4 | No | Yes | 10 min |
-| 4 | MQTT Resilience | 2 | No | Yes | 5 min |
-| 5 | Connection | 5 | No | Yes | 10 min |
-| 6 | Charging | 4 | No | Yes | 15 min |
-| 7 | Remote Commands | 4 | No | Yes | 10 min |
-| 8 | Phase Switching | 5 | No | Yes | 20 min |
-| 9 | Wallbox Emulator | 10 | No | Yes | 20 min |
-| 10 | OTA Update | 4 | 1 test | Yes | 15 min |
-| 11 | Edge Cases | 14 | 4 tests | Yes | 40 min |
-| 12 | Long Duration | 4 | No | Yes | 7+ days |
+| Phase | Category | Tests | Requires Human | Requires DUT | Duration | Transition Procedure |
+|-------|----------|------:|:--------------:|:------------:|----------|---------------------|
+| 1 | Setup | 2 | No | Yes | 5 min | — (fresh flash) |
+| 2 | Captive Portal | 4 | No | Yes | 15 min | — (NVS empty → AP) |
+| 3 | MQTT Transport | 4 | No | Yes | 10 min | §2.11: Phase 2→3a, 3a→3b, 3b→3d, 3d→4 |
+| 4 | MQTT Resilience | 2 | No | Yes | 5 min | §2.11: Phase 3d→4 (restore test mode) |
+| 5 | Connection | 5 | No | Yes | 10 min | §2.11: Phase 4→5 (start emulator) |
+| 6 | Charging | 4 | No | Yes | 15 min | — (emulator already connected) |
+| 7 | Remote Commands | 4 | No | Yes | 10 min | — |
+| 8 | Phase Switching | 5 | No | Yes | 20 min | §2.11: Phase 7→8 (init BCM 22) |
+| 9 | Wallbox Emulator | 10 | No | Yes | 20 min | — |
+| 10 | OTA Update | 4 | 1 test | Yes | 15 min | — |
+| 11 | Edge Cases | 14 | 4 tests | Yes | 40 min | — |
+| 12 | Long Duration | 4 | No | Yes | 7+ days | — |
 
 ### Manual-Only Tests
 
@@ -2249,3 +2574,4 @@ Notes:
 | 1.2 | 2026-02-09 | Claude | Phase switching tests: added relay readback via Pi BCM 22, wallbox emulator phase sync, architecture diagram; TC-130–TC-134 fully automated (no manual tests); TC-133 simulates stuck relay via emulator mismatch |
 | 1.3 | 2026-02-10 | Claude | Added wallbox emulator integration tests (WB-100 to WB-109), emulator setup instructions (Section 2.8), emulator HTTP API reference, Python helper functions, updated existing tests with emulator observation notes, added emulator commands to Section 10 |
 | 1.4 | 2026-02-10 | Claude | Moved MQTT resilience tests (EC-105→MR-100, EC-106→MR-101) to Phase 4 before wallbox connection; runs on Pi WiFi AP for network isolation from home LAN |
+| 1.5 | 2026-02-10 | Claude | Added prerequisite verification: DUT state matrix (§2.9), precondition check helpers (§2.10), phase transition procedures (§2.11); added Step 0 to all 62 test cases; replaced `wt.ssh_exec()` in MR-101 with `subprocess.run(["ssh", ...])` ; added automation notes to MT-101/MT-102 for `config_set` workaround; added Transition Procedure column to execution phases table |

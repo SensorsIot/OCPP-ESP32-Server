@@ -61,7 +61,7 @@ RUN git clone -b ${IDF_VERSION} --depth 1 --recursive --shallow-submodules \
     https://github.com/espressif/esp-idf.git ${IDF_PATH}
 
 # Install ESP-IDF tools
-RUN ${IDF_PATH}/install.sh all && \
+RUN ${IDF_PATH}/install.sh esp32 && \
     chown -R ${USER_UID}:${USER_GID} ${IDF_PATH} ${IDF_TOOLS_PATH}
 
 # Add ESP-IDF to bashrc for dev user

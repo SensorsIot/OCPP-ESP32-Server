@@ -11,5 +11,6 @@
 /* User Input (GPIO 14 — not a strapping pin, safe during reset) */
 #define PIN_BTN_CONFIG  GPIO_NUM_14
 
-/* Phase Switching Relay (single relay controls L2+L3 together; L1 always connected) */
-#define PIN_RELAY_PHASE23 GPIO_NUM_25
+/* Phase Switching Relay (single relay controls L2+L3 together; L1 always connected)
+ * GPIO 4 — on WT32-ETH01 header; GPIO 25 is Ethernet RXD0 (RMII, not available) */
+#define PIN_RELAY_PHASE23 GPIO_NUM_4
